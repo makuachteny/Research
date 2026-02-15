@@ -1,0 +1,20 @@
+name: mroh6
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - jupyterlab
+  - biopython
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scanpy
+  - mafft
+  - blast
+  - paml
+  - ete3
+  - pip

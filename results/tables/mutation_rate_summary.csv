@@ -1,0 +1,13 @@
+Metric,Value
+Number of MROH6 loci analyzed,596
+Mean raw pairwise divergence,0.3230
+SD raw pairwise divergence,0.1944
+Mean JC-corrected divergence,0.5295
+Median Ts/Tv ratio,0.89
+Genomic baseline (typical paralog div),0.03
+Fold difference vs baseline,10.8x
+One-sided p-value (t-test vs baseline),0.00e+00
+Bootstrap 95% CI (mean div),"[0.3220, 0.3240]"
+Chr7 copies: mean JC div from ancestral,0.7612
+Derived copies: mean JC div from ancestral,0.7956
+Mann-Whitney p (chr7 vs derived),9.83e-01
