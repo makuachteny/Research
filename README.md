@@ -328,3 +328,8 @@ If using this pipeline, please cite:
 - Kryazhimskiy & Plotkin 2008. The population genetics of dN/dS. *PLoS Genetics* 4(12).
 - Smeds et al. 2016. Direct estimate of the rate of germline mutation in a bird. *Genome Research* 26(9).
  (mutation rate)
+
+
+
+logo
+
