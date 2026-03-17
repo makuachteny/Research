@@ -1,6 +1,6 @@
-      seqfile = ../data/processed/paml_input/mroh6_codon.phy
-      treefile = ../data/processed/paml_input/mroh6_nj.tree
-      outfile = ../data/processed/paml_input/M2a_out.txt
+      seqfile = /Users/makuachtenygatluak/Documents/Research/data/processed/paml_input/mroh6_codon.phy
+      treefile = /Users/makuachtenygatluak/Documents/Research/data/processed/paml_input/mroh6_nj.tree
+      outfile = /Users/makuachtenygatluak/Documents/Research/data/processed/paml_input/M2a_out.txt
       noisy = 0
       verbose = 0
       runmode = 0

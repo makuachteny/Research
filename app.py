@@ -1,99 +1,88 @@
 #!/usr/bin/env python3
 """
 MROH6 Multicopy Analysis Dashboard
-===================================
-
-Interactive Dash app visualizing all pipeline stages:
-  Tab 1: Data Preparation (01) — BLAST hits, loci, alignment QC
-  Tab 2: Mutation Rate (02) — Divergence, Ts/Tv, baseline comparison
-  Tab 3: dN/dS Analysis (03) — PAML models, selection tests
-  Tab 4: Transcriptome (04) — Expression overlay placeholder
-  Tab 5: Price Equation (05) — Evolutionary simulations
-  Tab 6: Phylogenomic Hypercube (06) — 3D Gene A divergence across 100 species
+====================================
+Interactive Dash app with narrative-driven visualization, interactive
+filtering, and per-class biology summaries.
 
 Usage:
   python app.py
   → Opens at http://127.0.0.1:8050
 """
-
 import dash
-from dash import dcc, html, Input, Output, callback
+from dash import dcc, html, Input, Output, callback, State, no_update
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.subplots as sp
+from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from scipy import stats as sp_stats
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# ── Paths ────────────────────────────────────────────────────────────────
 PROJECT = Path(__file__).resolve().parent
 DATA_PROC = PROJECT / "data" / "processed"
 RESULTS = PROJECT / "results"
+TABLE_DIR = RESULTS / "tables"
 
-# ── Color palette ────────────────────────────────────────────────────────────
-COLORS = {
-    "bg":       "#0f1117",
-    "card":     "#1a1d27",
-    "border":   "#2d3040",
-    "text":     "#e0e0e0",
-    "accent":   "#6366f1",
-    "accent2":  "#22d3ee",
-    "accent3":  "#f59e0b",
-    "success":  "#10b981",
-    "danger":   "#ef4444",
-    "muted":    "#9ca3af",
+# ── Consistent class color palette ───────────────────────────────────────
+CLASS_COLORS = {
+    "chr7_ancestral": "#ef4444",   # red
+    "macro_derived":  "#3b82f6",   # blue
+    "micro_derived":  "#f59e0b",   # amber
+    "sex_chrom":      "#8b5cf6",   # purple
+}
+CLASS_LABELS = {
+    "chr7_ancestral": "Chr 7 (ancestral)",
+    "macro_derived":  "Macro-derived",
+    "micro_derived":  "Micro-derived",
+    "sex_chrom":      "Sex chromosomes",
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Theme ────────────────────────────────────────────────────────────────
+C = {
+    "bg":      "#0f1117",
+    "card":    "#1a1d27",
+    "card2":   "#1e2233",
+    "border":  "#2d3040",
+    "text":    "#e0e0e0",
+    "accent":  "#6366f1",
+    "accent2": "#22d3ee",
+    "accent3": "#f59e0b",
+    "success": "#10b981",
+    "danger":  "#ef4444",
+    "muted":   "#9ca3af",
+    "filter_bg": "#161927",
+}
+
+# ═════════════════════════════════════════════════════════════════════════
 # DATA LOADING
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 
-def load_loci_table():
-    """Load the loci metadata from Step 01."""
-    path = DATA_PROC / "mroh6_loci_table.csv"
-    if path.exists():
+def safe_load(path):
+    try:
         return pd.read_csv(path)
-    return None
+    except Exception:
+        return None
 
-def load_mutation_rate_summary():
-    """Load mutation rate summary from Step 02."""
-    path = RESULTS / "tables" / "mutation_rate_summary.csv"
-    if path.exists():
-        return pd.read_csv(path)
-    return None
+loci_df = safe_load(DATA_PROC / "mroh6_loci_table.csv")
+mut_summary = safe_load(TABLE_DIR / "mutation_rate_summary.csv")
+per_copy_div = safe_load(TABLE_DIR / "per_copy_divergence.csv")
+pairwise_dnds = safe_load(TABLE_DIR / "pairwise_dnds.csv")
+paml_results = safe_load(TABLE_DIR / "paml_results.csv")
 
-def generate_phylogenomic_data():
-    """Generate the 3D phylogenomic hypercube data (Step 06)."""
-    np.random.seed(42)
-    rows = []
-    for sp_idx in range(100):
-        species_name = f"Species_{sp_idx:03d}"
-        rows.append({
-            "Species": species_name, "Species_Index": sp_idx,
-            "Locus_Type": "Ancient", "Locus_Index": 0,
-            "Divergence": 0.0, "Confidence": 1.0,
-        })
-        n_par = np.random.randint(1, 6)
-        phylo = (sp_idx + 1) / 100
-        a, b = 2.0, max(1.0, 5.0 - 4.0 * phylo)
-        divs = np.sort(0.1 + np.random.beta(a, b, n_par) * 0.7)
-        for pi, d in enumerate(divs, 1):
-            rows.append({
-                "Species": species_name, "Species_Index": sp_idx,
-                "Locus_Type": "Paralogues", "Locus_Index": pi,
-                "Divergence": round(float(d), 4),
-                "Confidence": round(1.0 - float(d) * 0.5, 4),
-            })
-    return pd.DataFrame(rows)
 
-def simulate_price_equation(mu_dna=1e-3, mu_rna=1e-2, rna_fraction=0.3,
-                            n_copies=200, n_gen=500, sel=0.1, seed=42):
-    """Run one Price equation simulation."""
+def get_metric(df, metric_name, default="N/A"):
+    if df is None:
+        return default
+    row = df[df['Metric'].str.contains(metric_name, na=False, case=False)]
+    return str(row['Value'].iloc[0]) if len(row) > 0 else default
+
+
+def simulate_price(mu_dna=1e-3, mu_rna=1e-2, rna_fraction=0.3,
+                   n_copies=200, n_gen=500, sel=0.1, seed=42):
     rng = np.random.default_rng(seed)
     z = rng.normal(0, 0.01, n_copies)
-    hist = {"gen": [], "n_copies": [], "z_mean": [], "z_var": [],
-            "cov_wz": [], "e_w_dz": []}
+    hist = {"gen": [], "n_copies": [], "z_var": [], "cov_wz": [], "e_w_dz": []}
     for g in range(n_gen):
         n = len(z)
         if n == 0:
@@ -101,720 +90,972 @@ def simulate_price_equation(mu_dna=1e-3, mu_rna=1e-2, rna_fraction=0.3,
         w = np.exp(-sel * z**2)
         dz = rng.normal(0, mu_dna, n)
         w_bar = np.mean(w)
-        cov_wz = np.cov(w, z, ddof=0)[0, 1] / w_bar if w_bar > 0 else 0
-        e_w_dz = np.mean(w * dz) / w_bar if w_bar > 0 else 0
+        hist["cov_wz"].append(np.cov(w, z, ddof=0)[0, 1] / w_bar if w_bar > 0 else 0)
+        hist["e_w_dz"].append(np.mean(w * dz) / w_bar if w_bar > 0 else 0)
         z = z + dz
-        n_dup = rng.binomial(n, 0.02)
-        n_rna = rng.binomial(n_dup, rna_fraction)
-        n_dna = n_dup - n_rna
-        if n_dna > 0:
-            z = np.concatenate([z, z[rng.choice(n, n_dna)] + rng.normal(0, mu_dna, n_dna)])
-        if n_rna > 0:
-            z = np.concatenate([z, z[rng.choice(n, n_rna)] + rng.normal(0, mu_rna, n_rna)])
+        nd = rng.binomial(n, 0.02)
+        nr = rng.binomial(nd, rna_fraction)
+        if nd - nr > 0:
+            z = np.concatenate([z, z[rng.choice(n, nd - nr)] + rng.normal(0, mu_dna, nd - nr)])
+        if nr > 0:
+            z = np.concatenate([z, z[rng.choice(n, nr)] + rng.normal(0, mu_rna, nr)])
         nt = len(z)
         if nt > 0:
             wf = np.exp(-sel * z**2)
-            surv = rng.random(nt) < np.clip((1 - 0.02) * wf / np.max(wf), 0.01, 0.99)
-            z = z[surv]
+            z = z[rng.random(nt) < np.clip((1 - 0.02) * wf / np.max(wf), 0.01, 0.99)]
         hist["gen"].append(g)
         hist["n_copies"].append(len(z))
-        hist["z_mean"].append(np.mean(z) if len(z) > 0 else np.nan)
         hist["z_var"].append(np.var(z) if len(z) > 0 else np.nan)
-        hist["cov_wz"].append(cov_wz)
-        hist["e_w_dz"].append(e_w_dz)
     return {k: np.array(v) for k, v in hist.items()}
 
-# ── Pre-load data ────────────────────────────────────────────────────────────
-loci_df = load_loci_table()
-mut_summary = load_mutation_rate_summary()
-phylo_df = generate_phylogenomic_data()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# FIGURE BUILDERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
+# FIGURE HELPERS
+# ═════════════════════════════════════════════════════════════════════════
 
-def fig_template(fig):
-    """Apply dark theme to a Plotly figure."""
-    fig.update_layout(
+def dark(fig, height=None):
+    layout = dict(
         template="plotly_dark",
-        paper_bgcolor=COLORS["card"],
-        plot_bgcolor=COLORS["card"],
-        font_color=COLORS["text"],
-        title_font_size=16,
-        margin=dict(l=50, r=30, t=50, b=40),
+        paper_bgcolor=C["card"], plot_bgcolor=C["card"],
+        font=dict(color=C["text"], size=12),
+        title_font_size=15,
+        margin=dict(l=55, r=25, t=55, b=45),
+        legend=dict(font_size=10),
     )
+    if height:
+        layout["height"] = height
+    fig.update_layout(**layout)
     return fig
 
 
-def build_step1_figures():
-    """Step 01: Data Preparation figures."""
-    figs = []
-    if loci_df is not None:
-        # Chromosome distribution
-        chrom_counts = loci_df["chrom"].value_counts().head(20).reset_index()
-        chrom_counts.columns = ["Chromosome", "Loci"]
-        f1 = px.bar(chrom_counts, x="Chromosome", y="Loci",
-                    title="BLAST Loci per Chromosome",
-                    color="Loci", color_continuous_scale="Viridis")
-        figs.append(fig_template(f1))
+# ═════════════════════════════════════════════════════════════════════════
+# STEP 1 FIGURES — Narrative: counts → distributions → biology
+# ═════════════════════════════════════════════════════════════════════════
 
-        # Locus span distribution
-        f2 = px.histogram(loci_df, x="span", nbins=40,
-                          title="Locus Span Distribution (bp)",
-                          color_discrete_sequence=[COLORS["accent"]])
-        f2.add_vline(x=300, line_dash="dash", line_color=COLORS["danger"],
-                     annotation_text="300 bp filter")
-        figs.append(fig_template(f2))
-
-        # Hits per locus
-        f3 = px.histogram(loci_df, x="n_hits", nbins=20,
-                          title="BLAST Hits per Merged Locus",
-                          color_discrete_sequence=[COLORS["accent2"]])
-        figs.append(fig_template(f3))
-
-        # Sequence length vs span scatter
-        f4 = px.scatter(loci_df, x="span", y="total_seq_len",
-                        color="n_hits", size="n_hits",
-                        color_continuous_scale="Viridis",
-                        title="Locus Span vs Total Sequence Length",
-                        labels={"span": "Genomic Span (bp)",
-                                "total_seq_len": "Total Sequence (bp)"})
-        figs.append(fig_template(f4))
-    return figs
-
-
-def build_step2_figures():
-    """Step 02: Mutation Rate figures."""
-    figs = []
-    # Simulated divergence distribution based on empirical parameters
-    np.random.seed(42)
-    # Simulate JC-corrected divergence distribution matching MROH6 stats
-    jc_values = np.random.exponential(0.4, 5000)
-    jc_values = jc_values[jc_values < 1.5]
-
-    f1 = px.histogram(x=jc_values, nbins=50,
-                      title="Pairwise Divergence Distribution (JC-corrected)",
-                      labels={"x": "JC-corrected Divergence", "y": "Count"},
-                      color_discrete_sequence=[COLORS["accent"]])
-    f1.add_vline(x=0.03, line_dash="dash", line_color=COLORS["danger"],
-                 annotation_text="Baseline (0.03)")
-    f1.add_vline(x=0.5295, line_dash="dash", line_color=COLORS["accent3"],
-                 annotation_text="MROH6 mean (0.53)")
-    figs.append(fig_template(f1))
-
-    # Ts/Tv distribution
-    tstv = np.random.lognormal(-0.1, 0.5, 3000)
-    tstv = tstv[tstv < 5]
-    f2 = px.histogram(x=tstv, nbins=40,
-                      title="Transition/Transversion Ratio Distribution",
-                      labels={"x": "Ts/Tv Ratio", "y": "Count"},
-                      color_discrete_sequence=["#10b981"])
-    f2.add_vline(x=0.5, line_dash="dot", line_color=COLORS["muted"],
-                 annotation_text="Random (0.5)")
-    f2.add_vline(x=0.89, line_dash="dash", line_color=COLORS["accent3"],
-                 annotation_text="MROH6 median (0.89)")
-    figs.append(fig_template(f2))
-
-    # Divergence heatmap (simulated 50x50 subsample)
-    n_show = 50
-    div_matrix = np.random.exponential(0.3, (n_show, n_show))
-    div_matrix = (div_matrix + div_matrix.T) / 2
-    np.fill_diagonal(div_matrix, 0)
-    f3 = px.imshow(div_matrix, color_continuous_scale="YlOrRd",
-                   title="Pairwise Divergence Heatmap (50-copy subsample)",
-                   labels={"x": "Copy Index", "y": "Copy Index", "color": "Divergence"})
-    figs.append(fig_template(f3))
-
-    # Summary metrics as a gauge-like bar chart
-    if mut_summary is not None:
-        f4 = go.Figure()
-        metrics = [
-            ("JC-corrected Mean", 0.5295, COLORS["accent"]),
-            ("Ts/Tv Median", 0.89, COLORS["success"]),
-            ("Baseline", 0.03, COLORS["danger"]),
-        ]
-        for name, val, color in metrics:
-            f4.add_trace(go.Bar(name=name, x=[name], y=[val],
-                                marker_color=color, text=[f"{val:.4f}"],
-                                textposition="outside"))
-        f4.update_layout(title="Key Mutation Rate Metrics",
-                         yaxis_title="Value", showlegend=False)
-        figs.append(fig_template(f4))
-    return figs
-
-
-def build_step3_figures():
-    """Step 03: dN/dS Analysis figures."""
-    figs = []
-    # PAML model comparison (illustrative since codeml timed out)
-    models = ["M0", "M1a", "M2a", "M7", "M8"]
-    desc = ["Single omega", "Nearly neutral", "Positive sel.", "Beta dist.", "Beta + omega>1"]
-
-    f1 = go.Figure()
-    f1.add_trace(go.Bar(
-        x=models, y=[1, 2, 4, 10, 11],
-        name="Parameters (np)", marker_color=COLORS["accent"],
-        text=desc, textposition="outside"
-    ))
-    f1.update_layout(title="PAML codeml Models (planned)",
-                     yaxis_title="Number of Parameters",
-                     xaxis_title="Model")
-    figs.append(fig_template(f1))
-
-    # dN/dS interpretation guide
-    omega_values = np.linspace(0, 2, 200)
-    labels_y = np.where(omega_values < 0.3, "Purifying",
-               np.where(omega_values < 1.0, "Relaxed",
-               np.where(omega_values < 1.2, "Neutral", "Positive")))
-
-    f2 = go.Figure()
-    colors_map = {"Purifying": "#3b82f6", "Relaxed": "#f59e0b",
-                  "Neutral": "#9ca3af", "Positive": "#ef4444"}
-    for regime in ["Purifying", "Relaxed", "Neutral", "Positive"]:
-        mask = labels_y == regime
-        f2.add_trace(go.Scatter(
-            x=omega_values[mask], y=np.ones(mask.sum()),
-            mode="markers", name=regime,
-            marker=dict(color=colors_map[regime], size=8)
+def build_s1_chrom_bar(df):
+    """Chromosome distribution sorted by count, colored by class."""
+    cc = df.groupby("chrom").agg(
+        Count=("chrom", "size"),
+        chrom_class=("chrom_class", "first")
+    ).reset_index().sort_values("Count", ascending=False)
+    f = go.Figure()
+    for cls, color in CLASS_COLORS.items():
+        mask = cc["chrom_class"] == cls
+        sub = cc[mask]
+        if len(sub) == 0:
+            continue
+        f.add_trace(go.Bar(
+            x=sub["chrom"], y=sub["Count"],
+            name=CLASS_LABELS.get(cls, cls),
+            marker_color=color,
+            hovertemplate="Chr %{x}<br>%{y} gene units<extra></extra>",
         ))
-    f2.add_vline(x=1.0, line_dash="dash", line_color="white",
-                 annotation_text="omega = 1 (neutral)")
-    f2.update_layout(title="dN/dS (omega) Interpretation Guide",
-                     xaxis_title="omega (dN/dS)",
-                     yaxis_visible=False, height=300)
-    figs.append(fig_template(f2))
+    f.update_layout(
+        title="How many gene units per chromosome?",
+        xaxis_title="Chromosome (sorted by count)",
+        yaxis_title="Gene units",
+        barmode="stack",
+        xaxis=dict(categoryorder="total descending"),
+    )
+    return dark(f)
 
-    # Selection regime diagram
-    f3 = go.Figure()
-    categories = ["Bird average<br>(~0.15)", "Relaxed<br>constraint", "Neutral<br>(~1.0)", "Positive<br>selection"]
-    values = [0.15, 0.5, 1.0, 1.5]
-    bar_colors = ["#3b82f6", "#f59e0b", "#9ca3af", "#ef4444"]
-    f3.add_trace(go.Bar(x=categories, y=values, marker_color=bar_colors,
-                        text=[f"omega={v}" for v in values], textposition="outside"))
-    f3.update_layout(title="Expected dN/dS Regimes for MROH6",
-                     yaxis_title="dN/dS (omega)")
-    figs.append(fig_template(f3))
+
+def build_s1_coverage_hist(df):
+    """Coverage histogram with shaded pass/fail regions."""
+    f = go.Figure()
+    below = df[df["coverage_frac"] < 0.50]
+    above = df[df["coverage_frac"] >= 0.50]
+    f.add_trace(go.Histogram(
+        x=below["coverage_frac"], nbinsx=20,
+        marker_color="rgba(156,163,175,0.4)", name=f"Below 50% ({len(below)})",
+        hovertemplate="Coverage: %{x:.2f}<br>Count: %{y}<extra></extra>",
+    ))
+    f.add_trace(go.Histogram(
+        x=above["coverage_frac"], nbinsx=30,
+        marker_color=C["accent"], name=f"Above 50% ({len(above)})",
+        hovertemplate="Coverage: %{x:.2f}<br>Count: %{y}<extra></extra>",
+    ))
+    med = df["coverage_frac"].median()
+    mean = df["coverage_frac"].mean()
+    f.add_vline(x=0.50, line_dash="dash", line_color=C["danger"], line_width=2)
+    f.add_annotation(x=0.50, y=1, yref="paper", text=f"50% threshold",
+                     showarrow=False, font_color=C["danger"], xshift=-50)
+    f.add_annotation(x=med, y=0.92, yref="paper",
+                     text=f"Median={med:.2f}", showarrow=True, arrowhead=2,
+                     font_color=C["accent2"])
+    f.update_layout(
+        title=f"What fraction of exon 4-15 does each gene unit cover?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"{len(above)} pass / {len(below)} fail the 50% threshold "
+              f"(mean={mean:.2f}, median={med:.2f})</span>",
+        xaxis_title="Exon 4-15 coverage fraction",
+        yaxis_title="Count",
+        barmode="overlay",
+    )
+    return dark(f)
+
+
+def build_s1_span_hist(df):
+    """Span distribution with log x-axis and median line."""
+    med = df["span"].median()
+    # Bin into biologically meaningful ranges
+    bins = [0, 2000, 5000, 10000, 20000, df["span"].max() + 1]
+    labels = ["0-2kb", "2-5kb", "5-10kb", "10-20kb", ">20kb"]
+    df_copy = df.copy()
+    df_copy["span_bin"] = pd.cut(df_copy["span"], bins=bins, labels=labels, right=False)
+    bin_counts = df_copy["span_bin"].value_counts().reindex(labels).fillna(0)
+
+    f = go.Figure(go.Bar(
+        x=labels, y=bin_counts.values,
+        marker_color=[C["accent2"] if l != labels[0] else C["accent"]
+                      for l in labels],
+        text=bin_counts.values.astype(int),
+        textposition="outside",
+        hovertemplate="%{x}: %{y} gene units<extra></extra>",
+    ))
+    f.update_layout(
+        title=f"How large are the gene units?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"Median span = {med:,.0f} bp</span>",
+        xaxis_title="Genomic span",
+        yaxis_title="Count",
+    )
+    return dark(f)
+
+
+def build_s1_hits_discrete(df):
+    """Discrete bar plot of hits per gene unit with mode highlighted."""
+    df_copy = df.copy()
+    def bin_hits(n):
+        if n <= 2:
+            return str(int(n))
+        elif n <= 4:
+            return "3-4"
+        elif n <= 8:
+            return "5-8"
+        else:
+            return ">8"
+    df_copy["hit_bin"] = df_copy["n_hits"].apply(bin_hits)
+    order = ["1", "2", "3-4", "5-8", ">8"]
+    counts = df_copy["hit_bin"].value_counts().reindex(order).fillna(0)
+    mode_bin = counts.idxmax()
+    colors = [C["accent3"] if b == mode_bin else C["accent"]
+              for b in order]
+
+    f = go.Figure(go.Bar(
+        x=order, y=counts.values,
+        marker_color=colors,
+        text=counts.values.astype(int),
+        textposition="outside",
+        hovertemplate="%{x} hits: %{y} gene units<extra></extra>",
+    ))
+    f.add_annotation(
+        x=mode_bin, y=counts[mode_bin],
+        text=f"Mode", showarrow=True, arrowhead=2,
+        font=dict(color=C["accent3"], size=11), yshift=25,
+    )
+    f.update_layout(
+        title="How many BLAST hits contribute to each gene unit?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"Most gene units have {mode_bin} hits; "
+              f"a minority have >8 (likely multicopy loci)</span>",
+        xaxis_title="tBLASTn hits per gene unit",
+        yaxis_title="Count",
+    )
+    return dark(f)
+
+
+def build_s1_class_stacked(df):
+    """Stacked bar with counts and percentages per chromosome class."""
+    cc = df["chrom_class"].value_counts()
+    total = cc.sum()
+    f = go.Figure()
+    bottom = 0
+    for cls in ["micro_derived", "macro_derived", "chr7_ancestral", "sex_chrom"]:
+        n = cc.get(cls, 0)
+        pct = n / total * 100
+        f.add_trace(go.Bar(
+            x=["Gene Units"], y=[n],
+            name=f"{CLASS_LABELS.get(cls, cls)}: {n} ({pct:.1f}%)",
+            marker_color=CLASS_COLORS.get(cls, "gray"),
+            text=[f"{n} ({pct:.1f}%)"],
+            textposition="inside",
+            textfont=dict(size=11, color="white"),
+            hovertemplate=f"{CLASS_LABELS.get(cls, cls)}<br>{n} units ({pct:.1f}%)<extra></extra>",
+        ))
+    f.update_layout(
+        title="What chromosome classes do gene units come from?",
+        barmode="stack",
+        yaxis_title="Gene units",
+        showlegend=True,
+        legend=dict(orientation="h", y=-0.15),
+    )
+    return dark(f)
+
+
+def build_s1_scatter(df):
+    """Hits vs sequence length scatter colored by class, sized by coverage."""
+    f = go.Figure()
+    for cls, color in CLASS_COLORS.items():
+        sub = df[df["chrom_class"] == cls]
+        if len(sub) == 0:
+            continue
+        f.add_trace(go.Scatter(
+            x=sub["n_hits"], y=sub["total_seq_len"],
+            mode="markers",
+            marker=dict(
+                color=color, size=sub.get("coverage_frac", pd.Series([0.5]*len(sub))) * 12 + 3,
+                opacity=0.6, line=dict(width=0.5, color="white"),
+            ),
+            name=CLASS_LABELS.get(cls, cls),
+            hovertemplate=(
+                f"{CLASS_LABELS.get(cls, cls)}<br>"
+                "Hits: %{x}<br>Seq length: %{y:,.0f} bp<br>"
+                "<extra></extra>"
+            ),
+        ))
+    f.update_layout(
+        title="Do more BLAST hits → longer reconstructed sequence?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"Point size = exon 4-15 coverage fraction</span>",
+        xaxis_title="tBLASTn hits per gene unit",
+        yaxis_title="Total sequence length (bp)",
+    )
+    return dark(f)
+
+
+def build_s1_class_table(df):
+    """Per-class summary statistics as a Plotly table figure."""
+    rows = []
+    for cls in ["chr7_ancestral", "macro_derived", "micro_derived", "sex_chrom"]:
+        sub = df[df["chrom_class"] == cls]
+        if len(sub) == 0:
+            continue
+        rows.append({
+            "Class": CLASS_LABELS.get(cls, cls),
+            "N": len(sub),
+            "Med Coverage": f"{sub['coverage_frac'].median():.2f}" if 'coverage_frac' in sub.columns else "-",
+            "Med Span": f"{sub['span'].median():,.0f}",
+            "Med Hits": f"{sub['n_hits'].median():.0f}",
+            "Med Seq Len": f"{sub['total_seq_len'].median():,.0f}",
+        })
+    if not rows:
+        return None
+    tdf = pd.DataFrame(rows)
+    f = go.Figure(go.Table(
+        header=dict(
+            values=list(tdf.columns),
+            fill_color=C["accent"],
+            font=dict(color="white", size=12),
+            align="center",
+        ),
+        cells=dict(
+            values=[tdf[c] for c in tdf.columns],
+            fill_color=C["card2"],
+            font=dict(color=C["text"], size=11),
+            align="center",
+            height=28,
+        ),
+    ))
+    f.update_layout(
+        title="Per-class summary: how do chromosome classes compare?",
+        margin=dict(l=20, r=20, t=50, b=10),
+    )
+    return dark(f, height=220)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# STEP 2 FIGURES
+# ═════════════════════════════════════════════════════════════════════════
+
+def build_step2_figs():
+    figs = []
+    if per_copy_div is not None and len(per_copy_div) > 0:
+        pcol = "chrom_class" if "chrom_class" in per_copy_div.columns else None
+
+        # Divergence histogram by class
+        f = go.Figure()
+        if pcol:
+            for cls, color in CLASS_COLORS.items():
+                sub = per_copy_div[per_copy_div[pcol] == cls]
+                if len(sub) == 0:
+                    continue
+                f.add_trace(go.Histogram(
+                    x=sub["mean_jc_div"], nbinsx=30,
+                    name=CLASS_LABELS.get(cls, cls),
+                    marker_color=color, opacity=0.7,
+                ))
+        else:
+            f.add_trace(go.Histogram(x=per_copy_div["mean_jc_div"], nbinsx=40,
+                                     marker_color=C["accent"]))
+
+        f.add_vline(x=0.03, line_dash="dash", line_color=C["danger"], line_width=2)
+        f.add_annotation(x=0.03, y=1, yref="paper", text="Baseline (0.03)",
+                         showarrow=False, font_color=C["danger"], xshift=55)
+        mean_div = per_copy_div["mean_jc_div"].mean()
+        f.add_vline(x=mean_div, line_dash="dot", line_color=C["accent3"])
+        f.add_annotation(x=mean_div, y=0.92, yref="paper",
+                         text=f"MROH6 mean ({mean_div:.3f})",
+                         showarrow=False, font_color=C["accent3"], xshift=70)
+        fold = mean_div / 0.03
+        f.update_layout(
+            title=f"Is MROH6 divergence elevated above the genomic baseline?<br>"
+                  f"<span style='font-size:11px;color:{C['muted']}'>"
+                  f"Yes: {fold:.1f}x above baseline</span>",
+            xaxis_title="Mean JC-corrected divergence",
+            yaxis_title="Count",
+            barmode="overlay",
+        )
+        figs.append(dark(f))
+
+        # Box plot by class
+        if pcol:
+            f = go.Figure()
+            for cls, color in CLASS_COLORS.items():
+                sub = per_copy_div[per_copy_div[pcol] == cls]
+                if len(sub) == 0:
+                    continue
+                f.add_trace(go.Box(
+                    y=sub["mean_jc_div"], name=CLASS_LABELS.get(cls, cls),
+                    marker_color=color, line_color=color, boxpoints="outliers",
+                ))
+            f.add_hline(y=0.03, line_dash="dash", line_color=C["danger"])
+            f.update_layout(
+                title="Do all chromosome classes show elevated divergence?",
+                yaxis_title="Mean JC divergence",
+            )
+            figs.append(dark(f))
+
+        # Scatter
+        f = go.Figure()
+        if pcol:
+            for cls, color in CLASS_COLORS.items():
+                sub = per_copy_div[per_copy_div[pcol] == cls]
+                if len(sub) == 0:
+                    continue
+                f.add_trace(go.Scatter(
+                    x=sub.index, y=sub["mean_jc_div"],
+                    mode="markers", marker=dict(color=color, size=4, opacity=0.6),
+                    name=CLASS_LABELS.get(cls, cls),
+                ))
+        f.add_hline(y=0.03, line_dash="dash", line_color=C["danger"])
+        f.update_layout(
+            title="Per-copy divergence ordered by index",
+            xaxis_title="Copy index", yaxis_title="Mean JC divergence",
+        )
+        figs.append(dark(f))
+
+    # Key metrics bar
+    if mut_summary is not None:
+        pairs = [
+            ("JC mean", "JC-corrected mean", C["accent"]),
+            ("Ts/Tv", "Ts/Tv median", C["success"]),
+            ("Baseline", "Genomic baseline", C["danger"]),
+        ]
+        names, vals, colors = [], [], []
+        for label, key, color in pairs:
+            v = get_metric(mut_summary, key)
+            try:
+                vals.append(float(v))
+                names.append(label)
+                colors.append(color)
+            except (ValueError, TypeError):
+                pass
+        if vals:
+            f = go.Figure(go.Bar(
+                x=names, y=vals, marker_color=colors,
+                text=[f"{v:.4f}" for v in vals], textposition="outside",
+            ))
+            f.update_layout(title="Key mutation rate metrics", yaxis_title="Value")
+            figs.append(dark(f))
 
     return figs
 
 
-def build_step4_figures():
-    """Step 04: Transcriptome overlay (placeholder)."""
-    figs = []
-    f1 = go.Figure()
-    regions = ["HVC", "RA", "Area X", "Cortex", "Striatum"]
-    expression = [0.8, 0.3, 0.5, 0.1, 0.15]
-    f1.add_trace(go.Bar(x=regions, y=expression,
-                        marker_color=[COLORS["accent"] if e > 0.4 else COLORS["muted"]
-                                      for e in expression],
-                        text=[f"{e:.1f}" for e in expression],
-                        textposition="outside"))
-    f1.update_layout(title="MROH6 Expected Expression by Brain Region (Illustrative)",
-                     yaxis_title="Relative Expression",
-                     xaxis_title="Brain Region")
-    figs.append(fig_template(f1))
+# ═════════════════════════════════════════════════════════════════════════
+# STEP 3 FIGURES
+# ═════════════════════════════════════════════════════════════════════════
 
-    # Cell type specificity (illustrative)
-    f2 = go.Figure()
-    cell_types = ["Glutamatergic", "GABAergic", "Astrocyte", "Oligodendrocyte", "Microglia"]
-    expr_vals = [0.6, 0.4, 0.1, 0.05, 0.02]
-    f2.add_trace(go.Bar(x=cell_types, y=expr_vals,
-                        marker_color=COLORS["accent2"],
-                        text=[f"{v:.2f}" for v in expr_vals],
-                        textposition="outside"))
-    f2.update_layout(title="MROH6 Expression by Cell Type (Illustrative)",
-                     yaxis_title="Expression Level")
-    figs.append(fig_template(f2))
+def build_step3_figs():
+    figs = []
+    if pairwise_dnds is None or len(pairwise_dnds) == 0:
+        return figs
+
+    valid = pairwise_dnds.dropna(subset=['dN', 'dS', 'omega'])
+    valid = valid[(valid['dS'] > 0) & (valid['omega'] < 10)]
+    if len(valid) == 0:
+        return figs
+
+    med_omega = valid['omega'].median()
+    mean_dN = valid['dN'].mean()
+    med_dS = valid['dS'].median()
+
+    # Omega distribution with regime shading
+    f = go.Figure()
+    omega_plot = valid[valid['omega'] < 5]
+    f.add_trace(go.Histogram(
+        x=omega_plot["omega"], nbinsx=60,
+        marker_color=C["accent3"], opacity=0.8,
+        hovertemplate="omega=%{x:.2f}<br>Count=%{y}<extra></extra>",
+    ))
+    # Regime shading
+    f.add_vrect(x0=0, x1=0.3, fillcolor="rgba(59,130,246,0.08)", line_width=0,
+                annotation_text="Purifying", annotation_position="top left",
+                annotation_font_color="#3b82f6")
+    f.add_vrect(x0=0.3, x1=1.0, fillcolor="rgba(245,158,11,0.06)", line_width=0,
+                annotation_text="Relaxed", annotation_position="top left",
+                annotation_font_color="#f59e0b")
+    f.add_vrect(x0=1.0, x1=5.0, fillcolor="rgba(239,68,68,0.06)", line_width=0,
+                annotation_text="Positive", annotation_position="top left",
+                annotation_font_color="#ef4444")
+    f.add_vline(x=1.0, line_dash="dash", line_color=C["danger"], line_width=2)
+    f.add_vline(x=0.15, line_dash="dot", line_color="#3b82f6")
+    f.add_vline(x=med_omega, line_dash="dash", line_color=C["accent2"])
+    f.add_annotation(x=med_omega, y=0.95, yref="paper",
+                     text=f"Median={med_omega:.3f}", font_color=C["accent2"],
+                     showarrow=False, xshift=55)
+    f.update_layout(
+        title=f"What selection regime are MROH6 copies under?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"Median omega={med_omega:.3f} — between relaxed constraint and neutral</span>",
+        xaxis_title="omega (dN/dS)", yaxis_title="Count",
+    )
+    figs.append(dark(f))
+
+    # dN vs dS scatter with marginals
+    sample = valid.sample(min(5000, len(valid)), random_state=42)
+    f = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
+                      row_heights=[0.15, 0.85], column_widths=[0.85, 0.15],
+                      horizontal_spacing=0.02, vertical_spacing=0.02)
+    f.add_trace(go.Scatter(
+        x=sample["dS"], y=sample["dN"], mode="markers",
+        marker=dict(color=C["accent2"], size=3, opacity=0.2),
+        hovertemplate="dS=%{x:.3f}<br>dN=%{y:.3f}<extra></extra>",
+        showlegend=False,
+    ), row=2, col=1)
+    max_v = max(sample['dS'].quantile(0.95), sample['dN'].quantile(0.95))
+    f.add_trace(go.Scatter(x=[0, max_v], y=[0, max_v], mode="lines",
+                          line=dict(color=C["danger"], dash="dash", width=1),
+                          name="omega=1", showlegend=True), row=2, col=1)
+    f.add_trace(go.Scatter(x=[0, max_v], y=[0, max_v * 0.15], mode="lines",
+                          line=dict(color="#3b82f6", dash="dash", width=1),
+                          name="omega=0.15", showlegend=True), row=2, col=1)
+    # Marginal histograms
+    f.add_trace(go.Histogram(x=sample["dS"], nbinsx=40,
+                            marker_color=C["success"], opacity=0.5,
+                            showlegend=False), row=1, col=1)
+    f.add_trace(go.Histogram(y=sample["dN"], nbinsx=40,
+                            marker_color=C["accent"], opacity=0.5,
+                            showlegend=False), row=2, col=2)
+    f.update_layout(
+        title="Are nonsynonymous changes proportional to synonymous changes?",
+        xaxis3=dict(title="dS (synonymous rate)"),
+        yaxis3=dict(title="dN (nonsynonymous rate)"),
+    )
+    figs.append(dark(f, height=500))
+
+    # Genome comparison
+    exp_func = 0.15 * med_dS
+    exp_dup = 0.40 * med_dS
+    fold_func = mean_dN / exp_func if exp_func > 0 else 0
+    fold_dup = mean_dN / exp_dup if exp_dup > 0 else 0
+    f = go.Figure()
+    cats = ["MROH6 observed", "Functional gene avg", "Duplicated gene avg"]
+    vals = [mean_dN, exp_func, exp_dup]
+    colors_bar = [C["accent3"], "#3b82f6", C["success"]]
+    f.add_trace(go.Bar(
+        x=cats, y=vals, marker_color=colors_bar,
+        text=[f"{v:.4f}" for v in vals], textposition="outside",
+    ))
+    f.update_layout(
+        title=f"How does MROH6 dN compare to genome benchmarks?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"{fold_func:.1f}x functional, {fold_dup:.1f}x duplicated baseline</span>",
+        yaxis_title="Mean pairwise dN",
+    )
+    figs.append(dark(f))
+
+    # PAML model results
+    if paml_results is not None and 'lnL' in paml_results.columns:
+        vp = paml_results.dropna(subset=['lnL'])
+        if len(vp) > 0:
+            model_colors = {"M0": C["muted"], "M1a": "#3b82f6", "M2a": C["danger"],
+                            "M7": "#3b82f6", "M8": C["danger"]}
+            f = go.Figure(go.Bar(
+                x=vp["Model"], y=vp["lnL"],
+                marker_color=[model_colors.get(m, C["accent"]) for m in vp["Model"]],
+                text=[f"{v:.1f}" for v in vp["lnL"]], textposition="outside",
+            ))
+            # Check for LRTs
+            m1a = vp[vp["Model"] == "M1a"]["lnL"]
+            m2a = vp[vp["Model"] == "M2a"]["lnL"]
+            subtitle = ""
+            if len(m1a) > 0 and len(m2a) > 0:
+                delta = 2 * (m2a.iloc[0] - m1a.iloc[0])
+                from scipy.stats import chi2
+                p = chi2.sf(delta, 2)
+                sig = "SIGNIFICANT" if p < 0.05 else "n.s."
+                subtitle = f"M1a vs M2a: 2dlnL={delta:.1f}, p={p:.1e} ({sig})"
+
+            f.update_layout(
+                title=f"PAML codeml: do site models support positive selection?<br>"
+                      f"<span style='font-size:11px;color:{C['muted']}'>{subtitle}</span>",
+                yaxis_title="Log-likelihood",
+            )
+            figs.append(dark(f))
+
     return figs
 
 
-def build_step5_figures():
-    """Step 05: Price equation simulations."""
-    figs = []
-    # Run three simulation scenarios
-    h_dna = simulate_price_equation(mu_rna=1e-3, rna_fraction=0.0, seed=42)
-    h_mod = simulate_price_equation(mu_rna=1e-2, rna_fraction=0.3, seed=42)
-    h_hi  = simulate_price_equation(mu_rna=3e-2, rna_fraction=0.5, seed=42)
+# ═════════════════════════════════════════════════════════════════════════
+# STEP 4 & 5 FIGURES (kept simpler)
+# ═════════════════════════════════════════════════════════════════════════
 
+def build_step4_figs():
+    figs = []
+    regions = ['HVC', 'RA', 'Area X', 'LMAN', 'Cortex', 'Striatum', 'Cerebellum']
+    expr = [0.82, 0.35, 0.51, 0.28, 0.12, 0.18, 0.05]
+    is_song = [True, True, True, True, False, False, False]
+    colors_r = [C["danger"] if s else "#3b82f6" for s in is_song]
+
+    f = go.Figure(go.Bar(
+        x=regions, y=expr, marker_color=colors_r,
+        text=[f"{e:.2f}" for e in expr], textposition="outside",
+        hovertemplate="%{x}: %{y:.2f}<extra></extra>",
+    ))
+    f.update_layout(
+        title="Where in the brain is MROH6 expressed? (Illustrative)<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>Red = song nuclei, Blue = non-song</span>",
+        yaxis_title="Relative expression",
+    )
+    figs.append(dark(f))
+
+    song_mean = np.mean([e for e, s in zip(expr, is_song) if s])
+    non_mean = np.mean([e for e, s in zip(expr, is_song) if not s])
+    f = go.Figure(go.Bar(
+        x=["Song nuclei\n(HVC, RA, Area X, LMAN)", "Non-song regions"],
+        y=[song_mean, non_mean],
+        marker_color=[C["danger"], "#3b82f6"],
+        text=[f"{song_mean:.3f}", f"{non_mean:.3f}"],
+        textposition="outside",
+    ))
+    f.update_layout(
+        title=f"Is expression enriched in song nuclei?<br>"
+              f"<span style='font-size:11px;color:{C['muted']}'>"
+              f"Yes: {song_mean / non_mean:.1f}x enrichment (illustrative)</span>",
+        yaxis_title="Mean expression",
+    )
+    figs.append(dark(f))
+    return figs
+
+
+def build_step5_figs():
+    figs = []
+    mu_dna = 1e-3
+    mu_rna = 1e-2
+    if mut_summary is not None:
+        try:
+            fold = float(get_metric(mut_summary, 'Fold').replace('x', ''))
+            if not np.isnan(fold):
+                mu_rna = mu_dna * fold
+        except (ValueError, TypeError):
+            pass
+
+    h_dna = simulate_price(mu_rna=mu_dna, rna_fraction=0.0, seed=42)
+    h_mod = simulate_price(mu_rna=mu_rna, rna_fraction=0.3, seed=42)
+    h_hi = simulate_price(mu_rna=mu_rna * 3, rna_fraction=0.5, seed=42)
     scenarios = [
-        ("DNA only", h_dna, COLORS["accent"]),
-        ("DNA + RNA (30%)", h_mod, COLORS["accent3"]),
-        ("DNA + RNA (50%, high mu)", h_hi, COLORS["danger"]),
+        ("DNA only", h_dna, "#3b82f6"),
+        ("DNA + RNA (30%)", h_mod, C["accent3"]),
+        ("DNA + RNA (50%, high mu)", h_hi, C["danger"]),
     ]
 
-    # Copy number dynamics
-    f1 = go.Figure()
+    f = go.Figure()
     for name, h, color in scenarios:
-        f1.add_trace(go.Scatter(x=h["gen"], y=h["n_copies"], name=name,
-                                line=dict(color=color, width=2)))
-    f1.update_layout(title="Copy Number Dynamics", xaxis_title="Generation",
-                     yaxis_title="Number of Copies")
-    figs.append(fig_template(f1))
+        f.add_trace(go.Scatter(x=h["gen"], y=h["n_copies"], name=name,
+                              line=dict(color=color, width=2)))
+    f.update_layout(title="Does the RNA pathway change copy number dynamics?",
+                    xaxis_title="Generation", yaxis_title="Copies")
+    figs.append(dark(f))
 
-    # Trait variance
-    f2 = go.Figure()
+    f = go.Figure()
     for name, h, color in scenarios:
-        f2.add_trace(go.Scatter(x=h["gen"], y=h["z_var"], name=name,
-                                line=dict(color=color, width=2)))
-    f2.update_layout(title="Genetic Variation (Trait Variance)",
-                     xaxis_title="Generation", yaxis_title="Trait Variance")
-    figs.append(fig_template(f2))
+        f.add_trace(go.Scatter(x=h["gen"], y=h["z_var"], name=name,
+                              line=dict(color=color, width=2)))
+    f.update_layout(title="Does RNA transmission maintain more genetic variation?",
+                    xaxis_title="Generation", yaxis_title="Trait variance")
+    figs.append(dark(f))
 
-    # Price equation components (smoothed)
-    f3 = go.Figure()
-    window = 20
+    f = go.Figure()
     for name, h, color in scenarios:
-        cov_s = pd.Series(h["cov_wz"]).rolling(window).mean()
-        ew_s  = pd.Series(h["e_w_dz"]).rolling(window).mean()
-        f3.add_trace(go.Scatter(x=h["gen"], y=cov_s, name=f"{name} Cov(w,z)",
-                                line=dict(color=color, width=2)))
-        f3.add_trace(go.Scatter(x=h["gen"], y=ew_s, name=f"{name} E(w*dz)",
-                                line=dict(color=color, width=2, dash="dash")))
-    f3.add_hline(y=0, line_color=COLORS["muted"], line_dash="dot")
-    f3.update_layout(title="Price Equation: Selection vs Transmission",
-                     xaxis_title="Generation", yaxis_title="Component Value")
-    figs.append(fig_template(f3))
+        cov_s = pd.Series(h["cov_wz"]).rolling(20).mean()
+        ew_s = pd.Series(h["e_w_dz"]).rolling(20).mean()
+        f.add_trace(go.Scatter(x=h["gen"], y=cov_s, name=f"{name} Cov(w,z)",
+                              line=dict(color=color, width=2)))
+        f.add_trace(go.Scatter(x=h["gen"], y=ew_s, name=f"{name} E(w*dz)",
+                              line=dict(color=color, width=2, dash="dash")))
+    f.add_hline(y=0, line_color=C["muted"], line_dash="dot")
+    f.update_layout(title="Price equation: Selection vs Transmission bias",
+                    xaxis_title="Generation", yaxis_title="Component value")
+    figs.append(dark(f))
 
-    # Phase diagram
     rna_fracs = np.linspace(0, 0.8, 9)
     mu_mults = np.logspace(0, 2, 9)
-    variance_grid = np.zeros((len(rna_fracs), len(mu_mults)))
+    vgrid = np.zeros((len(rna_fracs), len(mu_mults)))
     for i, rf in enumerate(rna_fracs):
         for j, m in enumerate(mu_mults):
-            h = simulate_price_equation(mu_rna=1e-3 * m, rna_fraction=rf,
-                                        n_copies=100, n_gen=200, seed=42)
-            variance_grid[i, j] = np.nanmean(h["z_var"][-30:])
-
-    f4 = px.imshow(variance_grid,
-                   x=[f"{m:.0f}x" for m in mu_mults],
-                   y=[f"{rf:.1f}" for rf in rna_fracs],
-                   color_continuous_scale="YlOrRd",
-                   title="Phase Diagram: Trait Variance",
-                   labels={"x": "RNA/DNA Mutation Rate Ratio",
-                           "y": "RNA Pathway Fraction",
-                           "color": "Variance"})
-    figs.append(fig_template(f4))
+            h = simulate_price(mu_rna=mu_dna * m, rna_fraction=rf,
+                              n_copies=100, n_gen=200, seed=42)
+            vgrid[i, j] = np.nanmean(h["z_var"][-30:])
+    f = px.imshow(vgrid,
+                  x=[f"{m:.0f}x" for m in mu_mults],
+                  y=[f"{rf:.1f}" for rf in rna_fracs],
+                  color_continuous_scale="YlOrRd",
+                  title="Phase diagram: When does RNA pathway matter most?",
+                  labels={"x": "RNA/DNA rate ratio", "y": "RNA fraction",
+                          "color": "Variance"})
+    figs.append(dark(f))
     return figs
 
 
-def build_step6_3d():
-    """Step 06: 3D Phylogenomic Hypercube."""
-    fig = px.scatter_3d(
-        phylo_df, x="Species", y="Locus_Index", z="Divergence",
-        color="Divergence", symbol="Locus_Type", size="Confidence",
-        color_continuous_scale="Viridis",
-        title="3D Phylogenomic Matrix: Gene A Divergence across 100 Species",
-        labels={"Species": "Species", "Locus_Index": "Locus (0=Ancient)",
-                "Divergence": "Sequence Distance"},
-        hover_data=["Species", "Locus_Type", "Locus_Index", "Divergence", "Confidence"],
-    )
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(title="Species", nticks=10, showticklabels=False),
-            yaxis=dict(title="Locus (0=Ancient)"),
-            zaxis=dict(title="Sequence Distance"),
-        ),
-        height=650, margin=dict(l=0, r=0, b=0, t=40),
-    )
-    return fig_template(fig)
-
-
-def build_step6_supplementary():
-    """Step 06: Additional phylogenomic figures."""
-    figs = []
-    par_df = phylo_df[phylo_df.Locus_Type == "Paralogues"]
-
-    # Divergence vs species index
-    par_summ = par_df.groupby("Species_Index").agg(
-        mean_div=("Divergence", "mean"),
-        max_div=("Divergence", "max"),
-        n_par=("Divergence", "count"),
-    ).reset_index()
-
-    slope, intercept, r, p, se = sp_stats.linregress(
-        par_summ["Species_Index"], par_summ["mean_div"])
-
-    f1 = px.scatter(par_summ, x="Species_Index", y="mean_div",
-                    size="n_par", color="max_div",
-                    color_continuous_scale="Viridis",
-                    title=f"Divergence vs Phylogenetic Distance (R²={r**2:.3f}, p={p:.1e})",
-                    labels={"Species_Index": "Species Index", "mean_div": "Mean Divergence"})
-    x_fit = np.array([0, 99])
-    f1.add_trace(go.Scatter(x=x_fit, y=slope * x_fit + intercept,
-                            mode="lines", line=dict(color="red", dash="dash"),
-                            name=f"Fit (slope={slope:.4f})"))
-    f1.add_hline(y=0.5295, line_dash="dot", line_color=COLORS["accent3"],
-                 annotation_text="MROH6 mean (0.53)")
-    figs.append(fig_template(f1))
-
-    # Paralog count distribution
-    f2 = px.histogram(par_summ, x="n_par", nbins=5,
-                      title="Paralogs per Species Distribution",
-                      color_discrete_sequence=[COLORS["accent2"]])
-    figs.append(fig_template(f2))
-
-    # Confidence distribution
-    f3 = px.histogram(phylo_df, x="Confidence", nbins=30, color="Locus_Type",
-                      title="Confidence Score Distribution by Locus Type",
-                      color_discrete_map={"Ancient": COLORS["success"],
-                                          "Paralogues": COLORS["accent"]})
-    figs.append(fig_template(f3))
-    return figs
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 # LAYOUT HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 
-def metric_card(title, value, subtitle=""):
-    """Create a styled metric card."""
+def metric_card(title, value, subtitle="", highlight=False):
+    border_color = C["accent"] if highlight else C["border"]
     return html.Div([
-        html.P(title, style={"margin": "0", "fontSize": "12px",
-                              "color": COLORS["muted"], "textTransform": "uppercase",
-                              "letterSpacing": "1px"}),
-        html.H2(value, style={"margin": "4px 0", "color": COLORS["text"],
-                               "fontFamily": "monospace"}),
+        html.P(title, style={"margin": "0", "fontSize": "11px",
+                             "color": C["muted"], "textTransform": "uppercase",
+                             "letterSpacing": "1px"}),
+        html.H2(value, style={"margin": "4px 0", "color": C["text"],
+                              "fontFamily": "monospace", "fontSize": "20px"}),
         html.P(subtitle, style={"margin": "0", "fontSize": "11px",
-                                 "color": COLORS["muted"]}),
+                                "color": C["muted"]}),
     ], style={
-        "background": COLORS["card"], "border": f"1px solid {COLORS['border']}",
-        "borderRadius": "8px", "padding": "16px", "textAlign": "center",
-        "flex": "1", "minWidth": "160px",
+        "background": C["card"], "border": f"1px solid {border_color}",
+        "borderRadius": "8px", "padding": "14px 16px", "textAlign": "center",
+        "flex": "1", "minWidth": "140px",
     })
 
 
-def section_header(step_num, title, description):
-    """Create a section header."""
+def section_header(step_num, title, subtitle):
     return html.Div([
         html.Div([
             html.Span(f"0{step_num}", style={
-                "background": COLORS["accent"], "color": "white",
+                "background": C["accent"], "color": "white",
                 "padding": "4px 10px", "borderRadius": "4px",
                 "fontWeight": "bold", "fontSize": "13px", "marginRight": "10px",
             }),
             html.Span(title, style={"fontSize": "20px", "fontWeight": "bold",
-                                     "color": COLORS["text"]}),
+                                    "color": C["text"]}),
         ], style={"display": "flex", "alignItems": "center"}),
-        html.P(description, style={"color": COLORS["muted"], "marginTop": "6px",
-                                    "fontSize": "13px"}),
-    ], style={"marginBottom": "20px"})
+        html.P(subtitle, style={"color": C["muted"], "marginTop": "4px",
+                                "fontSize": "13px", "fontStyle": "italic"}),
+    ], style={"marginBottom": "18px"})
 
 
 def graph_card(figure, height=450):
-    """Wrap a figure in a styled card."""
     return html.Div(
         dcc.Graph(figure=figure, style={"height": f"{height}px"},
                   config={"displayModeBar": True, "scrollZoom": True}),
         style={
-            "background": COLORS["card"], "border": f"1px solid {COLORS['border']}",
-            "borderRadius": "8px", "padding": "8px", "marginBottom": "16px",
+            "background": C["card"], "border": f"1px solid {C['border']}",
+            "borderRadius": "8px", "padding": "8px", "marginBottom": "14px",
         }
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+def grid_row(figs, cols=2):
+    rows = []
+    for i in range(0, len(figs), cols):
+        chunk = figs[i:i + cols]
+        rows.append(html.Div(
+            [graph_card(f) for f in chunk],
+            style={"display": "grid",
+                   "gridTemplateColumns": f"repeat({min(cols, len(chunk))}, 1fr)",
+                   "gap": "12px"}
+        ))
+    return rows
+
+
+def finding_box(text, color_key="accent3"):
+    return html.Div([
+        html.Span("Key Finding: ", style={"fontWeight": "bold",
+                                          "color": C[color_key]}),
+        html.Span(text, style={"color": C["text"], "fontSize": "13px"}),
+    ], style={"background": C["card2"], "border": f"1px solid {C['border']}",
+              "borderRadius": "8px", "padding": "12px", "marginBottom": "16px"})
+
+
+# ═════════════════════════════════════════════════════════════════════════
 # TAB BUILDERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 
 def tab_step1():
-    """Step 01: Data Preparation."""
-    n_loci = len(loci_df) if loci_df is not None else "N/A"
-    n_chrom = loci_df["chrom"].nunique() if loci_df is not None else "N/A"
-    anc = "chr7:28.8Mb" if loci_df is not None else "N/A"
+    if loci_df is None:
+        return html.Div("No data. Run pipeline step 01 first.")
 
-    # Chromosome class counts
-    n_chr7 = n_micro = n_macro = n_sex = 0
-    if loci_df is not None and "chrom_class" in loci_df.columns:
-        cc = loci_df["chrom_class"].value_counts()
-        n_chr7 = cc.get("chr7_ancestral", 0)
-        n_micro = cc.get("micro_derived", 0)
-        n_macro = cc.get("macro_derived", 0)
-        n_sex = cc.get("sex_chrom", 0)
+    n = len(loci_df)
+    cc = loci_df["chrom_class"].value_counts() if "chrom_class" in loci_df.columns else pd.Series()
+    n_chr7 = cc.get("chr7_ancestral", 0)
+    n_micro = cc.get("micro_derived", 0)
+    n_macro = cc.get("macro_derived", 0)
+    n_sex = cc.get("sex_chrom", 0)
+    pct_retained = n / 419 * 100 if n > 0 else 0
+    med_cov = loci_df["coverage_frac"].median() if "coverage_frac" in loci_df.columns else 0
+    med_span = loci_df["span"].median()
+    med_hits = loci_df["n_hits"].median()
 
     content = [
         section_header(1, "Data Preparation",
-                       "Parse tBLASTn results, merge loci, classify chr7 (parent) vs derived, MAFFT alignment"),
+                       "What survived the exon 4-15 coverage filter?"),
+        # Row 1: Summary cards
         html.Div([
-            metric_card("Raw BLAST Hits", "3,039", "tBLASTn MROH6 vs zebra finch"),
-            metric_card("Merged Loci", str(n_loci), "ALL kept (no length filter)"),
-            metric_card("Chr 7 (Parent)", str(n_chr7), "Ancestral locus + siblings"),
-            metric_card("Micro-derived", str(n_micro), "Chr 9-37 (most copies)"),
-            metric_card("Macro-derived", str(n_macro), "Chr 1-8 excl. 7"),
-            metric_card("Ancestral Copy", anc, "MROH6 near LSS on chr7"),
+            metric_card("tBLASTn Hits", "3,471", "Combined from 2 queries"),
+            metric_card("Gene Units", str(n), f"{pct_retained:.0f}% of 419 retained", highlight=True),
+            metric_card("Median Coverage", f"{med_cov:.2f}", "Exon 4-15 fraction"),
+            metric_card("Median Span", f"{med_span:,.0f} bp", "Genomic extent"),
+            metric_card("Median Hits/Unit", f"{med_hits:.0f}", "tBLASTn depth"),
         ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "20px"}),
+                  "marginBottom": "18px"}),
+        # Row 2: Chromosome class cards
+        html.Div([
+            metric_card("Chr 7 (ancestral)", str(n_chr7), f"{n_chr7/n*100:.1f}% — source locus"),
+            metric_card("Micro-derived", str(n_micro), f"{n_micro/n*100:.1f}% — dispersed copies"),
+            metric_card("Macro-derived", str(n_macro), f"{n_macro/n*100:.1f}% — chr 1-8"),
+            metric_card("Sex chromosomes", str(n_sex), f"{n_sex/n*100:.1f}% — Z/W copies"),
+        ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
+                  "marginBottom": "18px"}),
+        finding_box(
+            f"Tony's exon 4-15 strategy: skip variable N-terminal exons 1-3, "
+            f"focus on conserved core + C-terminus. The 50% coverage filter retained "
+            f"{n} of 419 gene units ({pct_retained:.0f}%), removing truncated copies. "
+            f"94.7% of copies are micro-derived (dispersed), consistent with retrotransposition."
+        ),
     ]
-    figs = build_step1_figures()
-    if figs:
-        # 2x2 grid
-        for i in range(0, len(figs), 2):
-            row = [graph_card(figs[i])]
-            if i + 1 < len(figs):
-                row.append(graph_card(figs[i + 1]))
-            content.append(html.Div(row, style={"display": "grid",
-                "gridTemplateColumns": "1fr 1fr", "gap": "12px"}))
+
+    # Distributions row (3 plots)
+    content.extend(grid_row([
+        build_s1_coverage_hist(loci_df),
+        build_s1_chrom_bar(loci_df),
+        build_s1_span_hist(loci_df),
+    ], cols=3))
+
+    # Relationships row (3 plots)
+    content.extend(grid_row([
+        build_s1_hits_discrete(loci_df),
+        build_s1_class_stacked(loci_df),
+        build_s1_scatter(loci_df),
+    ], cols=3))
+
+    # Per-class summary table
+    tbl = build_s1_class_table(loci_df)
+    if tbl:
+        content.append(graph_card(tbl, height=220))
+
     return html.Div(content)
 
 
 def tab_step2():
-    """Step 02: Mutation Rate Analysis."""
+    jc_mean = get_metric(mut_summary, 'JC-corrected mean')
+    fold = get_metric(mut_summary, 'Fold elevation', 'N/A')
+    tstv = get_metric(mut_summary, 'Ts/Tv median')
+    chr7_der = get_metric(mut_summary, 'Chr7.*Derived', 'N/A')
+    p_val = get_metric(mut_summary, 'P-value', 'N/A')
+
     content = [
-        section_header(2, "Mutation Rate Analysis — Chr 7 (Parent) vs Derived",
-                       "Pairwise divergence (NaN-safe), chr7-vs-rest comparison, Ts/Tv ratios"),
+        section_header(2, "Mutation Rate Analysis",
+                       "Is divergence elevated above the genomic baseline?"),
         html.Div([
-            metric_card("JC-corrected Mean", "0.5295", "All pairwise divergence"),
-            metric_card("Genomic Baseline", "0.03", "Typical paralog div"),
-            metric_card("Fold Elevation", "17.7x", "Above baseline (NaN-fixed)"),
-            metric_card("Median Ts/Tv", "0.89", "Transition bias (RT > 0.5)"),
-            metric_card("Chr7 → Derived", "0.80 JC", "Mean div from ancestral"),
+            metric_card("JC Mean", jc_mean, "All pairwise", highlight=True),
+            metric_card("Baseline", "0.03", "Typical paralog"),
+            metric_card("Fold Elevation", fold, f"p = {p_val}", highlight=True),
+            metric_card("Ts/Tv", tstv, ">0.5 = transition bias"),
+            metric_card("Chr7 -> Derived", chr7_der, "Ancestral to copies"),
         ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "20px"}),
-        html.Div([
-            html.P("Key Finding: ", style={"fontWeight": "bold", "display": "inline",
-                                            "color": COLORS["accent3"]}),
-            html.Span("MROH6 copies show robustly elevated divergence vs genomic baseline. "
-                       "Ts/Tv = 0.89 shows transition bias consistent with RT-mediated errors. "
-                       "Copies are dispersed across microchromosomes (not tandem), matching retrotransposition. "
-                       "NaN propagation bug FIXED — all statistics now computed correctly.",
-                       style={"color": COLORS["text"], "fontSize": "13px"}),
-        ], style={"background": COLORS["card"], "border": f"1px solid {COLORS['border']}",
-                  "borderRadius": "8px", "padding": "12px", "marginBottom": "16px"}),
+                  "marginBottom": "18px"}),
+        finding_box(
+            "MROH6 copies are robustly elevated above the genomic baseline. "
+            "The transition bias (Ts/Tv > 0.5) is consistent with reverse "
+            "transcriptase errors. Copies are dispersed across microchromosomes, "
+            "matching the retrotransposition hypothesis."
+        ),
     ]
-    figs = build_step2_figures()
-    for i in range(0, len(figs), 2):
-        row = [graph_card(figs[i])]
-        if i + 1 < len(figs):
-            row.append(graph_card(figs[i + 1]))
-        content.append(html.Div(row, style={"display": "grid",
-            "gridTemplateColumns": "1fr 1fr", "gap": "12px"}))
+    content.extend(grid_row(build_step2_figs()))
     return html.Div(content)
 
 
 def tab_step3():
-    """Step 03: dN/dS Analysis."""
+    n_seqs = len(loci_df) if loci_df is not None else "N/A"
+    omega = "N/A"
+    mean_dn = "N/A"
+    fold_str = ""
+    if pairwise_dnds is not None and len(pairwise_dnds) > 0:
+        valid = pairwise_dnds.dropna(subset=['omega'])
+        valid = valid[(valid['omega'] < 10) & (valid['dS'] > 0)]
+        if len(valid) > 0:
+            omega = f"{valid['omega'].median():.3f}"
+            mean_dn = f"{valid['dN'].mean():.4f}"
+            exp = 0.15 * valid['dS'].median()
+            fold_str = f"{valid['dN'].mean() / exp:.1f}x" if exp > 0 else ""
+
+    m0_omega = "N/A"
+    if paml_results is not None and 'omega' in paml_results.columns:
+        m0 = paml_results[paml_results['Model'] == 'M0']
+        if len(m0) > 0 and pd.notna(m0['omega'].iloc[0]):
+            m0_omega = f"{m0['omega'].iloc[0]:.3f}"
+
     content = [
         section_header(3, "dN/dS Selection Analysis",
-                       "PAML codeml models M0-M8, likelihood ratio tests for positive selection"),
+                       "Are MROH6 copies under positive selection, neutral drift, or purifying constraint?"),
         html.Div([
-            metric_card("Sequences", "50", "Subsampled for PAML"),
-            metric_card("Codons", "167", "From 501bp alignment"),
-            metric_card("Models", "M0-M8", "5 nested models"),
-            metric_card("Status", "Timeout", "codeml exceeded 1hr"),
+            metric_card("Pairwise omega", omega, "Nei-Gojobori median", highlight=True),
+            metric_card("M0 omega", m0_omega, "PAML global", highlight=True),
+            metric_card("Mean dN", mean_dn, f"{fold_str} functional avg"),
+            metric_card("Bird Average", "0.15", "Purifying selection"),
+            metric_card("Sequences", str(n_seqs), "Exon 4-15 filtered"),
         ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "20px"}),
-        html.Div([
-            html.P("Caveat (Kryazhimskiy & Plotkin 2008): ",
-                   style={"fontWeight": "bold", "display": "inline",
-                           "color": COLORS["accent3"]}),
-            html.Span("dN/dS has limited power intra-specifically. "
-                       "These MROH6 copies are paralogs within a single genome. "
-                       "Only dN/dS >> 1 at specific sites provides strong evidence.",
-                       style={"color": COLORS["text"], "fontSize": "13px"}),
-        ], style={"background": COLORS["card"], "border": f"1px solid {COLORS['border']}",
-                  "borderRadius": "8px", "padding": "12px", "marginBottom": "16px"}),
+                  "marginBottom": "18px"}),
+        finding_box(
+            "dN/dS analysis combines pairwise Nei-Gojobori (all copy pairs) with "
+            "PAML codeml site models (M0-M8). Tony's analysis found 30 BEB sites "
+            "under positive selection (P>0.95) with 5.9x elevated dN. "
+            "Caveat: these are paralogs within one genome (Kryazhimskiy & Plotkin 2008) "
+            "so omega near 1.0 is ambiguous between drift and selection.",
+            "accent"
+        ),
     ]
-    figs = build_step3_figures()
-    for i in range(0, len(figs), 2):
-        row = [graph_card(figs[i])]
-        if i + 1 < len(figs):
-            row.append(graph_card(figs[i + 1]))
-        content.append(html.Div(row, style={"display": "grid",
-            "gridTemplateColumns": "1fr 1fr", "gap": "12px"}))
+    content.extend(grid_row(build_step3_figs()))
     return html.Div(content)
 
 
 def tab_step4():
-    """Step 04: Transcriptome Overlay."""
     content = [
         section_header(4, "Transcriptome Overlay",
-                       "MROH6 expression in song-control nuclei (Colquitt et al. 2021, GSE148997)"),
+                       "Is MROH6 expressed in song-control brain nuclei?"),
         html.Div([
-            metric_card("Dataset", "GSE148997", "Colquitt et al. 2021 (Science)"),
-            metric_card("Brain Regions", "HVC, RA, Area X", "Song-control nuclei"),
-            metric_card("Status", "Pending", "Data download required"),
+            metric_card("Dataset", "GSE148997", "Colquitt et al. 2021"),
+            metric_card("Regions", "HVC, RA, Area X", "Song-control nuclei"),
+            metric_card("Status", "Illustrative", "GEO download needed"),
         ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "20px"}),
-        html.Div([
-            html.P("Note: ", style={"fontWeight": "bold", "display": "inline",
-                                     "color": COLORS["accent2"]}),
-            html.Span("Transcriptome data requires GEO download. The plots below are "
-                       "illustrative placeholders showing expected expression patterns.",
-                       style={"color": COLORS["text"], "fontSize": "13px"}),
-        ], style={"background": COLORS["card"], "border": f"1px solid {COLORS['border']}",
-                  "borderRadius": "8px", "padding": "12px", "marginBottom": "16px"}),
+                  "marginBottom": "18px"}),
+        finding_box(
+            "Plots are illustrative. If MROH6 copies are functional and involved "
+            "in vocal learning, expression should be enriched in HVC and RA. "
+            "Download the GEO dataset to test this prediction.",
+            "accent2"
+        ),
     ]
-    figs = build_step4_figures()
-    for f in figs:
-        content.append(graph_card(f))
+    content.extend(grid_row(build_step4_figs()))
     return html.Div(content)
 
 
 def tab_step5():
-    """Step 05: Price Equation."""
+    mu_rna_val = "1e-2"
+    fold_val = "10"
+    if mut_summary is not None:
+        try:
+            fold_v = float(get_metric(mut_summary, 'Fold').replace('x', ''))
+            mu_rna_val = f"{1e-3 * fold_v:.4f}"
+            fold_val = f"{fold_v:.0f}"
+        except (ValueError, TypeError):
+            pass
+
     content = [
         section_header(5, "Price Equation Model",
-                       "Evolutionary dynamics: DNA-only vs RNA-mediated multicopy expansion"),
+                       "How does RNA-mediated duplication change evolutionary dynamics?"),
         html.Div([
-            metric_card("DNA mu", "1e-3", "Baseline mutation rate"),
-            metric_card("RNA mu", "1e-2", "10x elevated (RT errors)"),
-            metric_card("Generations", "500", "Simulation length"),
-            metric_card("Initial Copies", "200", "Starting population"),
+            metric_card("DNA mu", "1e-3", "Baseline rate"),
+            metric_card("RNA mu", mu_rna_val, f"{fold_val}x elevated (empirical)"),
+            metric_card("Generations", "500", "Simulation"),
+            metric_card("Initial Copies", "200", "Starting N"),
         ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "20px"}),
-        html.Div([
-            html.P("Model: ", style={"fontWeight": "bold", "display": "inline",
-                                      "color": COLORS["accent"]}),
-            html.Span("Price equation: delta_z_bar = Cov(w,z)/w_bar + E(w*dz)/w_bar. "
-                       "Selection (Cov) acts to reduce variance; RNA transmission (E) "
-                       "introduces elevated variation via retrotransposition.",
-                       style={"color": COLORS["text"], "fontSize": "13px"}),
-        ], style={"background": COLORS["card"], "border": f"1px solid {COLORS['border']}",
-                  "borderRadius": "8px", "padding": "12px", "marginBottom": "16px"}),
+                  "marginBottom": "18px"}),
+        finding_box(
+            "Price equation partitions evolutionary change: "
+            "Cov(w,z) = selection reduces variance, E(w*dz) = transmission bias "
+            "from RT errors increases it. RNA pathway maintains genetic diversity "
+            "that would otherwise be lost to purifying selection."
+        ),
     ]
-    figs = build_step5_figures()
-    for i in range(0, len(figs), 2):
-        row = [graph_card(figs[i])]
-        if i + 1 < len(figs):
-            row.append(graph_card(figs[i + 1]))
-        content.append(html.Div(row, style={"display": "grid",
-            "gridTemplateColumns": "1fr 1fr", "gap": "12px"}))
+    content.extend(grid_row(build_step5_figs()))
     return html.Div(content)
 
 
-def tab_step6():
-    """Step 06: Phylogenomic Hypercube."""
-    n_total = len(phylo_df)
-    n_anc = (phylo_df.Locus_Type == "Ancient").sum()
-    n_par = (phylo_df.Locus_Type == "Paralogues").sum()
-    mean_div = phylo_df[phylo_df.Locus_Type == "Paralogues"]["Divergence"].mean()
-
-    content = [
-        section_header(6, "3D Phylogenomic Hypercube",
-                       "Gene A divergence across 100 species — interactive 3D visualization"),
-        html.Div([
-            metric_card("Species", "100", "Sorted by phylogenetic distance"),
-            metric_card("Total Points", str(n_total), f"{n_anc} ancient + {n_par} paralogs"),
-            metric_card("Mean Paralog Div", f"{mean_div:.4f}", "Synthetic Ks/dS"),
-            metric_card("Div Range", "0.0 — 0.8", "Ancient to most diverged"),
-        ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "20px"}),
-
-        # Main 3D plot (full width)
-        graph_card(build_step6_3d(), height=650),
-    ]
-
-    # Supplementary figures
-    supp_figs = build_step6_supplementary()
-    row = []
-    for f in supp_figs:
-        row.append(graph_card(f))
-        if len(row) == 2:
-            content.append(html.Div(row, style={"display": "grid",
-                "gridTemplateColumns": "1fr 1fr", "gap": "12px"}))
-            row = []
-    if row:
-        content.append(html.Div(row, style={"display": "grid",
-            "gridTemplateColumns": "1fr", "gap": "12px"}))
-
-    return html.Div(content)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 # DASH APP
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 
 app = dash.Dash(
     __name__,
-    title="MROH6 Multicopy Analysis Pipeline",
+    title="MROH6 Multicopy Analysis — Exon 4-15 Pipeline",
     suppress_callback_exceptions=True,
 )
 
-# ── App Layout ───────────────────────────────────────────────────────────────
+tab_style = {"padding": "10px 18px", "fontSize": "13px", "fontWeight": "500"}
+tab_sel = {**tab_style, "borderTop": f"3px solid {C['accent']}",
+           "background": C["card2"]}
+
 app.layout = html.Div([
     # Header
     html.Div([
         html.Div([
-            html.H1("MROH6 Multicopy Analysis Pipeline",
+            html.H1("MROH6 Multicopy Analysis",
                      style={"margin": "0", "fontSize": "22px", "fontWeight": "bold"}),
-            html.P("Evolutionary dynamics of MROH6 gene copies in zebra finch",
+            html.P("Exon 4-15 strategy | Zebra finch (T. guttata) | Monaco Lab",
                    style={"margin": "2px 0 0 0", "fontSize": "12px",
-                           "color": COLORS["muted"]}),
+                          "color": C["muted"]}),
         ]),
         html.Div([
-            html.Span("6 STAGES", style={
-                "background": COLORS["accent"], "color": "white",
-                "padding": "4px 12px", "borderRadius": "12px",
-                "fontSize": "11px", "fontWeight": "bold",
+            html.Span("5 STAGES", style={
+                "background": C["accent"], "color": "white",
+                "padding": "5px 14px", "borderRadius": "14px",
+                "fontSize": "11px", "fontWeight": "bold", "letterSpacing": "1px",
             }),
         ]),
     ], style={
         "display": "flex", "justifyContent": "space-between",
         "alignItems": "center", "padding": "16px 24px",
-        "background": COLORS["card"],
-        "borderBottom": f"1px solid {COLORS['border']}",
+        "background": C["card"],
+        "borderBottom": f"2px solid {C['accent']}",
     }),
 
-    # Tabs
     dcc.Tabs(
-        id="pipeline-tabs",
-        value="step1",
+        id="tabs", value="step1",
         children=[
             dcc.Tab(label="01 Data Prep", value="step1",
-                    style={"padding": "8px 16px", "fontSize": "13px"},
-                    selected_style={"padding": "8px 16px", "fontSize": "13px",
-                                    "borderTop": f"2px solid {COLORS['accent']}"}),
+                    style=tab_style, selected_style=tab_sel),
             dcc.Tab(label="02 Mutation Rate", value="step2",
-                    style={"padding": "8px 16px", "fontSize": "13px"},
-                    selected_style={"padding": "8px 16px", "fontSize": "13px",
-                                    "borderTop": f"2px solid {COLORS['accent']}"}),
+                    style=tab_style, selected_style=tab_sel),
             dcc.Tab(label="03 dN/dS", value="step3",
-                    style={"padding": "8px 16px", "fontSize": "13px"},
-                    selected_style={"padding": "8px 16px", "fontSize": "13px",
-                                    "borderTop": f"2px solid {COLORS['accent']}"}),
+                    style=tab_style, selected_style=tab_sel),
             dcc.Tab(label="04 Transcriptome", value="step4",
-                    style={"padding": "8px 16px", "fontSize": "13px"},
-                    selected_style={"padding": "8px 16px", "fontSize": "13px",
-                                    "borderTop": f"2px solid {COLORS['accent']}"}),
+                    style=tab_style, selected_style=tab_sel),
             dcc.Tab(label="05 Price Equation", value="step5",
-                    style={"padding": "8px 16px", "fontSize": "13px"},
-                    selected_style={"padding": "8px 16px", "fontSize": "13px",
-                                    "borderTop": f"2px solid {COLORS['accent']}"}),
-            dcc.Tab(label="06 3D Hypercube", value="step6",
-                    style={"padding": "8px 16px", "fontSize": "13px"},
-                    selected_style={"padding": "8px 16px", "fontSize": "13px",
-                                    "borderTop": f"2px solid {COLORS['accent']}"}),
+                    style=tab_style, selected_style=tab_sel),
         ],
-        style={"background": COLORS["card"]},
+        style={"background": C["card"]},
     ),
 
-    # Tab content
-    html.Div(id="tab-content", style={"padding": "24px",
-                                        "minHeight": "80vh"}),
-
+    html.Div(id="tab-content", style={"padding": "24px", "minHeight": "80vh"}),
 ], style={
-    "backgroundColor": COLORS["bg"],
-    "color": COLORS["text"],
+    "backgroundColor": C["bg"],
+    "color": C["text"],
     "fontFamily": "'Inter', -apple-system, sans-serif",
     "minHeight": "100vh",
 })
 
-# ── Callback ─────────────────────────────────────────────────────────────────
-@callback(Output("tab-content", "children"), Input("pipeline-tabs", "value"))
-def render_tab(tab):
-    builders = {
-        "step1": tab_step1,
-        "step2": tab_step2,
-        "step3": tab_step3,
-        "step4": tab_step4,
-        "step5": tab_step5,
-        "step6": tab_step6,
-    }
-    return builders.get(tab, tab_step1)()
 
-# ── Run ──────────────────────────────────────────────────────────────────────
+@callback(Output("tab-content", "children"), Input("tabs", "value"))
+def render_tab(tab):
+    return {"step1": tab_step1, "step2": tab_step2, "step3": tab_step3,
+            "step4": tab_step4, "step5": tab_step5}.get(tab, tab_step1)()
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("  MROH6 Multicopy Analysis Dashboard")
+    print("  MROH6 Multicopy Analysis Dashboard (Exon 4-15)")
     print("  http://127.0.0.1:8050")
     print("=" * 60 + "\n")
     app.run(debug=True, port=8050)

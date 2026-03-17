@@ -1,0 +1,47 @@
+{
+    "species_name": "Taeniopygia guttata",
+    "common_name": "Zebra finch",
+    "genome_assembly": "bTaeGut7.mat",
+    "genome_accession": "GCF_003957565.2",
+    "gene_name": "MROH6",
+
+    "tblastn_files": [
+        "Zebra finch input files/Taeniopygia guttata tBLASTn MROH6 XP_030133788.3 alignment.txt",
+        "Zebra finch input files/Taeniopygia guttata tBLASTn MROH6 XP_072787743.1 alignment.txt"
+    ],
+    "exon13_anchor_file": "Zebra finch input files/MROH6 exon 13 V5SBW1G0014-Alignment.txt",
+    "exon13_anchor_format": "tabular",
+
+    "reference_proteins": [
+        "Zebra finch input files/XP_030133788.3.fa",
+        "Zebra finch input files/XP_072787743.1.fa"
+    ],
+
+    "total_exons": 15,
+    "analysis_exon_range": [4, 15],
+    "fallback_exon_range": null,
+    "exon_boundaries_aa": {
+        "1": [1, 30], "2": [31, 55], "3": [56, 96], "4": [97, 140],
+        "5": [141, 185], "6": [186, 230], "7": [231, 275], "8": [276, 320],
+        "9": [321, 365], "10": [366, 410], "11": [411, 455], "12": [456, 500],
+        "13": [501, 545], "14": [546, 600], "15": [601, 643]
+    },
+
+    "ancestral_chromosome": "7",
+    "ancestral_locus_range": [28000000, 29500000],
+    "macro_chromosomes": ["1", "1A", "2", "3", "4", "4A", "5", "6", "7", "8"],
+    "sex_chromosomes": ["Z", "W"],
+
+    "min_coverage": 0.50,
+    "merge_gap": 500,
+    "max_anchor_dist": 25000,
+    "genomic_baseline": 0.03,
+    "max_seqs_paml": 40,
+    "min_gene_units_for_paml": 15,
+
+    "transcriptome": {
+        "available": true,
+        "geo_accession": "GSE148997",
+        "reference": "Colquitt et al. 2021, Science 371(6530)"
+    }
+}

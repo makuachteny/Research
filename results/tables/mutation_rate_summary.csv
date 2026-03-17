@@ -1,13 +1,14 @@
 Metric,Value
-Number of MROH6 loci analyzed,411
-Mean raw pairwise divergence,0.2954
-SD raw pairwise divergence,0.1664
-Mean JC-corrected divergence,0.4284
-Median Ts/Tv ratio,0.94
-"Genomic baseline (upper range, recent paralogs)",0.05
-Fold difference vs baseline,5.9x
-One-sided p-value (t-test vs baseline),0.00e+00
-Bootstrap 95% CI (mean div),"[0.2943, 0.2966]"
-Chr7 copies: mean JC div from ancestral,0.6663
-Derived copies: mean JC div from ancestral,0.5576
-Mann-Whitney p (chr7 vs derived),2.48e-01
+Number of sequences,399
+Alignment columns,1085
+JC-corrected mean,0.4062
+JC-corrected median,0.4123
+Raw divergence mean,0.2886
+Ts/Tv median,0.8830
+Genomic baseline,0.03
+Fold elevation,13.5x
+P-value,3.51e-56
+Chr7 copies,8
+Derived copies,391
+Chr7→Derived mean JC,0.5454
+Within Chr7 mean JC,0.5048
