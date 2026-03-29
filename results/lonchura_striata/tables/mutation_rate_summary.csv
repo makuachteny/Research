@@ -1,0 +1,16 @@
+Metric,Value
+Species,Lonchura striata
+Gene,MROH6
+Number of sequences,507
+Alignment columns,777
+JC-corrected mean,0.3932
+JC-corrected median,0.3573
+Raw divergence mean,0.2686
+Ts/Tv median,0.9450
+Genomic baseline,0.03
+Fold elevation,13.1x
+P-value,1.29e-48
+Ancestral copies,29
+Derived copies,478
+Ancestral→Derived mean JC,0.6358
+Within Ancestral mean JC,0.5577

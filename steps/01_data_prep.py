@@ -70,6 +70,7 @@ from utils import (
     parse_blast_fasta, parse_exon13_blastn, parse_combined_tblastn,
     build_accession_to_chrom, define_gene_units, gene_units_to_fasta,
     merge_overlapping_hits, define_gene_units_from_anchors_only,
+    define_gene_units_from_tblastn_only,
 )
 from species_config import load_config, resolve_path, get_data_dirs, classify_chrom
 
@@ -98,27 +99,31 @@ print(f"  STEP 01: DATA PREPARATION — {GENE} in {SPECIES}")
 print(f"  Genome: {cfg['genome_assembly']} ({cfg['genome_accession']})")
 print("=" * 70)
 
-# ── 1a. Parse exon 13 anchors ────────────────────────────────────────────
+# ── 1a. Parse exon 13 anchors (optional) ────────────────────────────────
 # WHY: The 23-mer probe from exon 13 is highly conserved across all MROH copies.
 # Each BLASTn hit = one gene copy. This gives us the total copy count and
 # genomic positions before we even look at sequence data.
-# The probe can come in two formats:
-#   - Tabular BLASTn (zebra finch): tab-separated columns from NCBI
-#   - FASTA (Melospiza georgiana): header encodes coordinates, sequence below
+# For species without exon 13 anchor data, the pipeline builds gene units
+# directly from tBLASTn hits by merging overlapping alignments.
 print("\n── 1a. Parsing exon 13 anchors ──")
 
-anchor_path = resolve_path(cfg, cfg["exon13_anchor_file"])
-anchor_fmt = cfg.get("exon13_anchor_format", "auto")
-exon13 = parse_exon13_blastn(anchor_path, fmt=anchor_fmt)
-print(f"  Exon 13 anchors: {len(exon13)} across {exon13['saccver'].nunique()} accessions")
+has_anchors = cfg.get("exon13_anchor_file") is not None
+acc_to_chrom_anchor = {}
 
-# Build accession -> chromosome mapping from anchors (for FASTA format)
-if anchor_fmt == "fasta" or (anchor_fmt == "auto" and anchor_path.suffix != '.txt'):
-    # Re-parse as FASTA to get chromosome mapping
-    anchor_fasta_df = parse_blast_fasta(anchor_path)
-    acc_to_chrom_anchor = build_accession_to_chrom(anchor_fasta_df)
+if has_anchors:
+    anchor_path = resolve_path(cfg, cfg["exon13_anchor_file"])
+    anchor_fmt = cfg.get("exon13_anchor_format", "auto")
+    exon13 = parse_exon13_blastn(anchor_path, fmt=anchor_fmt)
+    print(f"  Exon 13 anchors: {len(exon13)} across {exon13['saccver'].nunique()} accessions")
+
+    # Build accession -> chromosome mapping from anchors (for FASTA format)
+    if anchor_fmt == "fasta" or (anchor_fmt == "auto" and anchor_path.suffix != '.txt'):
+        anchor_fasta_df = parse_blast_fasta(anchor_path)
+        acc_to_chrom_anchor = build_accession_to_chrom(anchor_fasta_df)
 else:
-    acc_to_chrom_anchor = {}
+    print(f"  No exon 13 anchor file — gene units will be built from tBLASTn only.")
+    exon13 = pd.DataFrame(columns=['saccver', 'anchor_start', 'anchor_end',
+                                    'anchor_mid', 'strand', 'pident'])
 
 # ── 1b. Parse tBLASTn hits ───────────────────────────────────────────────
 # WHY: tBLASTn searches the MROH protein against the genome, returning the
@@ -127,9 +132,6 @@ else:
 # we need for alignment, divergence calculation, and codon-based dN/dS.
 # Multiple protein queries can be combined (e.g., two isoforms) to capture
 # diverged copies that one query might miss.
-# If tBLASTn data is not yet available, the pipeline proceeds with anchor-
-# only analysis (copy counting and chromosome distribution) and tells the
-# user exactly what file to provide.
 print("\n── 1b. Parsing tBLASTn hits ──")
 
 tblastn_paths = [resolve_path(cfg, f) for f in cfg["tblastn_files"]]
@@ -148,19 +150,28 @@ else:
     for p in tblastn_paths:
         print(f"    {p}")
     print(f"  Proceeding with anchor-only analysis (positions but no sequences).")
-    print(f"  To complete the pipeline, provide tBLASTn alignment file(s).")
     tblastn = pd.DataFrame()
     acc_to_chrom = acc_to_chrom_anchor
     has_tblastn = False
 
-# Show chromosome distribution from anchors
-anchor_chroms = exon13['saccver'].map(acc_to_chrom).fillna('unknown')
-print(f"\n  Anchor distribution by chromosome:")
-for chrom, count in anchor_chroms.value_counts().head(15).items():
-    print(f"    chr {chrom}: {count} anchors")
-
-total_copies = len(exon13)
-print(f"\n  Total MROH6 copies (by exon 13 count): {total_copies}")
+# Show chromosome distribution
+if has_anchors and len(exon13) > 0:
+    anchor_chroms = exon13['saccver'].map(acc_to_chrom).fillna('unknown')
+    print(f"\n  Anchor distribution by chromosome:")
+    for chrom, count in anchor_chroms.value_counts().head(15).items():
+        print(f"    chr {chrom}: {count} anchors")
+    total_copies = len(exon13)
+    print(f"\n  Total {GENE} copies (by exon 13 count): {total_copies}")
+elif has_tblastn:
+    anchor_chroms = tblastn['chrom'].copy()
+    print(f"\n  tBLASTn hit distribution by chromosome:")
+    for chrom, count in tblastn['chrom'].value_counts().head(15).items():
+        print(f"    chr {chrom}: {count} hits")
+    total_copies = tblastn['accession'].nunique()
+    print(f"\n  Accessions with {GENE} hits: {total_copies}")
+else:
+    anchor_chroms = pd.Series(dtype=str)
+    total_copies = 0
 
 # ── Figure 1: BLAST hit overview ──────────────────────────────────────────
 fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -242,11 +253,18 @@ def run_gene_unit_definition(exon_range, expected_len_nt, label):
     print(f"  Expected CDS length: {expected_len_nt} nt")
     print(f"  Minimum sequence length: {int(expected_len_nt * MIN_COVERAGE)} nt")
 
-    if has_tblastn:
+    if has_tblastn and has_anchors:
         gu_all, gu_filtered = define_gene_units(
             exon13, tblastn, acc_to_chrom,
             expected_len_nt=expected_len_nt,
             max_dist=cfg["max_anchor_dist"],
+            merge_gap=cfg["merge_gap"],
+            min_coverage=MIN_COVERAGE
+        )
+    elif has_tblastn:
+        gu_all, gu_filtered = define_gene_units_from_tblastn_only(
+            tblastn, acc_to_chrom,
+            expected_len_nt=expected_len_nt,
             merge_gap=cfg["merge_gap"],
             min_coverage=MIN_COVERAGE
         )
@@ -375,56 +393,59 @@ if has_tblastn:
     print(f"  Saved: {FIG_DIR / 'exon_coverage_filter.png'}")
 
 
-# ── Figure 3: Exon 13 anchor quality ─────────────────────────────────────
-fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+# ── Figure 3: Exon 13 anchor quality (skip if no anchors) ───────────────
+if has_anchors and len(exon13) > 0:
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-ax = axes[0]
-if 'pident' in exon13.columns:
-    ax.hist(exon13['pident'], bins=20, color='seagreen', edgecolor='white')
-    ax.set_xlabel('% Identity to exon 13 probe')
-    ax.set_ylabel('Count')
-    ax.set_title(f'Exon 13 anchor identity (n={len(exon13)})')
-    ax.axvline(exon13['pident'].median(), color='red', linestyle='--',
-               label=f'Median={exon13["pident"].median():.1f}%')
-    ax.legend()
+    ax = axes[0]
+    if 'pident' in exon13.columns and len(exon13) > 0:
+        ax.hist(exon13['pident'], bins=20, color='seagreen', edgecolor='white')
+        ax.set_xlabel('% Identity to exon 13 probe')
+        ax.set_ylabel('Count')
+        ax.set_title(f'Exon 13 anchor identity (n={len(exon13)})')
+        ax.axvline(exon13['pident'].median(), color='red', linestyle='--',
+                   label=f'Median={exon13["pident"].median():.1f}%')
+        ax.legend()
+    else:
+        ax.text(0.5, 0.5, 'Identity data\nnot available\n(FASTA format)',
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+
+    ax = axes[1]
+    exon13_chroms_fig = exon13['saccver'].map(acc_to_chrom).fillna('unknown')
+    chrom_counts_e13 = exon13_chroms_fig.value_counts().head(15)
+    chrom_counts_e13.plot.bar(ax=ax, color='seagreen')
+    ax.set_title('Exon 13 anchors per chromosome')
+    ax.set_xlabel('Chromosome')
+    ax.set_ylabel('Anchors')
+
+    ax = axes[2]
+    if has_tblastn and len(tblastn) > 0:
+        blast_by_chrom = tblastn['chrom'].value_counts()
+        e13_by_chrom = exon13_chroms_fig.value_counts()
+        compare_chroms = blast_by_chrom.head(12).index
+        x = range(len(compare_chroms))
+        w = 0.35
+        ax.bar([i - w/2 for i in x],
+               [blast_by_chrom.get(c, 0) for c in compare_chroms],
+               w, label='tBLASTn hits', color='steelblue', alpha=0.8)
+        ax.bar([i + w/2 for i in x],
+               [e13_by_chrom.get(c, 0) * 10 for c in compare_chroms],
+               w, label='Exon 13 anchors (x10)', color='seagreen', alpha=0.8)
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(compare_chroms, rotation=45)
+        ax.set_title('tBLASTn hits vs exon 13 anchors')
+        ax.legend()
+    else:
+        ax.text(0.5, 0.5, 'tBLASTn data\nnot yet available',
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+
+    plt.suptitle(f'{GENE} exon 13 anchor analysis — {SPECIES}', fontsize=13, y=1.02)
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / 'exon13_anchor_quality.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {FIG_DIR / 'exon13_anchor_quality.png'}")
 else:
-    ax.text(0.5, 0.5, 'Identity data\nnot available\n(FASTA format)',
-            ha='center', va='center', fontsize=12, transform=ax.transAxes)
-
-ax = axes[1]
-exon13_chroms = exon13['saccver'].map(acc_to_chrom).fillna('unknown')
-chrom_counts_e13 = exon13_chroms.value_counts().head(15)
-chrom_counts_e13.plot.bar(ax=ax, color='seagreen')
-ax.set_title('Exon 13 anchors per chromosome')
-ax.set_xlabel('Chromosome')
-ax.set_ylabel('Anchors')
-
-ax = axes[2]
-if has_tblastn and len(tblastn) > 0:
-    blast_by_chrom = tblastn['chrom'].value_counts()
-    e13_by_chrom = exon13_chroms.value_counts()
-    compare_chroms = blast_by_chrom.head(12).index
-    x = range(len(compare_chroms))
-    w = 0.35
-    ax.bar([i - w/2 for i in x],
-           [blast_by_chrom.get(c, 0) for c in compare_chroms],
-           w, label='tBLASTn hits', color='steelblue', alpha=0.8)
-    ax.bar([i + w/2 for i in x],
-           [e13_by_chrom.get(c, 0) * 10 for c in compare_chroms],
-           w, label='Exon 13 anchors (x10)', color='seagreen', alpha=0.8)
-    ax.set_xticks(list(x))
-    ax.set_xticklabels(compare_chroms, rotation=45)
-    ax.set_title('tBLASTn hits vs exon 13 anchors')
-    ax.legend()
-else:
-    ax.text(0.5, 0.5, 'tBLASTn data\nnot yet available',
-            ha='center', va='center', fontsize=12, transform=ax.transAxes)
-
-plt.suptitle(f'{GENE} exon 13 anchor analysis — {SPECIES}', fontsize=13, y=1.02)
-plt.tight_layout()
-plt.savefig(FIG_DIR / 'exon13_anchor_quality.png', dpi=150, bbox_inches='tight')
-plt.close()
-print(f"  Saved: {FIG_DIR / 'exon13_anchor_quality.png'}")
+    print("  Skipping exon 13 anchor figure (no anchor data)")
 
 
 # ── Figure 4: Genomic distribution ───────────────────────────────────────
@@ -617,7 +638,10 @@ derived = gu_filtered[gu_filtered['chrom'] != cfg['ancestral_chromosome']]
 print("\n" + "=" * 70)
 print(f"  DATA PREPARATION SUMMARY — {GENE} in {SPECIES}")
 print("=" * 70)
-print(f"  Exon 13 anchors:           {len(exon13)}")
+if has_anchors:
+    print(f"  Exon 13 anchors:           {len(exon13)}")
+else:
+    print(f"  Exon 13 anchors:           N/A (tBLASTn-only mode)")
 if has_tblastn:
     print(f"  Combined tBLASTn hits:     {len(tblastn)}")
 print(f"  Gene units (all):          {len(gu_all)}")

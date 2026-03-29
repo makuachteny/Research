@@ -51,22 +51,41 @@ Input requirements per species (see configs/*.json):
 """
 import subprocess
 import sys
+import shutil
 import argparse
 import json
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent
-NOTEBOOKS = PROJECT / 'notebooks'
+STEPS_DIR = PROJECT / 'steps'
 CONFIGS = PROJECT / 'configs'
 
+
+def check_dependencies():
+    """Check that required external tools are available."""
+    deps = {
+        'mafft': 'MAFFT (multiple sequence alignment) — install via: brew install mafft',
+        'codeml': 'PAML codeml (dN/dS analysis) — install via: brew install paml',
+    }
+    missing = []
+    for cmd, desc in deps.items():
+        if shutil.which(cmd):
+            print(f"  ✓ {cmd}")
+        else:
+            print(f"  ✗ {cmd} — {desc}")
+            missing.append(cmd)
+    if missing:
+        print(f"\n  WARNING: {len(missing)} tool(s) missing. Some pipeline steps may fail.")
+    return missing
+
 STEPS = [
-    ('01',  NOTEBOOKS / '01_data_prep.py',            'Data Preparation'),
-    ('02',  NOTEBOOKS / '02_mutation_rate.py',         'Mutation Rate Analysis'),
-    ('03',  NOTEBOOKS / '03_dnds_analysis.py',         'dN/dS Selection Analysis'),
-    ('03b', NOTEBOOKS / '03b_geneconv_analysis.py',    'Gene Conversion (GENECONV)'),
-    ('03c', NOTEBOOKS / '03c_selection_tests.py',      'Polymorphism vs Selection Tests'),
-    ('04',  NOTEBOOKS / '04_transcriptome_overlay.py', 'Transcriptome Overlay'),
-    ('05',  NOTEBOOKS / '05_price_equation.py',        'Price Equation Model'),
+    ('01',  STEPS_DIR / '01_data_prep.py',            'Data Preparation'),
+    ('02',  STEPS_DIR / '02_mutation_rate.py',         'Mutation Rate Analysis'),
+    ('03',  STEPS_DIR / '03_dnds_analysis.py',         'dN/dS Selection Analysis'),
+    ('03b', STEPS_DIR / '03b_geneconv_analysis.py',    'Gene Conversion (GENECONV)'),
+    ('03c', STEPS_DIR / '03c_selection_tests.py',      'Polymorphism vs Selection Tests'),
+    ('04',  STEPS_DIR / '04_transcriptome_overlay.py', 'Transcriptome Overlay'),
+    ('05',  STEPS_DIR / '05_price_equation.py',        'Price Equation Model'),
 ]
 
 
@@ -153,6 +172,9 @@ Examples:
     print(f"  {species_name} ({common_name})")
     print(f"  Genome: {cfg.get('genome_assembly', '?')} ({cfg.get('genome_accession', '?')})")
     print("=" * 70)
+
+    print("\n  Checking dependencies:")
+    check_dependencies()
 
     if not args.dash_only:
         if args.step:

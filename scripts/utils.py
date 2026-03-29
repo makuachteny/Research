@@ -450,6 +450,56 @@ def loci_to_fasta(loci_df, outpath):
 
 # ── Anchor-only gene units (when no tBLASTn available) ───────────────────
 
+def define_gene_units_from_tblastn_only(tblastn_df, accession_to_chrom,
+                                        expected_len_nt, merge_gap=500,
+                                        min_coverage=0.50):
+    """Define gene units from tBLASTn hits alone (no exon 13 anchors).
+
+    Use this when exon 13 anchor data is not available. Merges nearby tBLASTn
+    hits on the same chromosome/strand into gene units and applies coverage filter.
+
+    Returns:
+        Tuple of (all_gene_units_df, filtered_gene_units_df)
+    """
+    if len(tblastn_df) == 0:
+        empty = pd.DataFrame(columns=[
+            'gene_unit_id', 'chrom', 'accession', 'anchor_pos',
+            'start', 'end', 'span', 'n_hits', 'total_seq_len',
+            'sequence', 'has_exon13', 'coverage_frac',
+        ])
+        return empty, empty
+
+    gene_units = []
+    gu_id = 0
+    min_len = int(expected_len_nt * min_coverage)
+
+    for acc in sorted(tblastn_df['accession'].unique()):
+        hits = tblastn_df[tblastn_df['accession'] == acc]
+        chrom = accession_to_chrom.get(acc, 'unknown')
+        merged_loci = merge_overlapping_hits(hits, max_gap=merge_gap)
+        for _, locus in merged_loci.iterrows():
+            gene_units.append({
+                'gene_unit_id': gu_id, 'chrom': chrom,
+                'accession': acc, 'anchor_pos': None,
+                'start': int(locus['start']), 'end': int(locus['end']),
+                'span': int(locus['span']),
+                'n_hits': int(locus['n_hits']),
+                'total_seq_len': int(locus['total_seq_len']),
+                'sequence': locus['sequence'], 'has_exon13': False,
+            })
+            gu_id += 1
+
+    all_gu = pd.DataFrame(gene_units)
+    if len(all_gu) == 0:
+        return all_gu, all_gu
+
+    all_gu['coverage_frac'] = all_gu['total_seq_len'] / expected_len_nt
+    filtered_gu = all_gu[all_gu['total_seq_len'] >= min_len].copy()
+    filtered_gu['coverage_frac'] = filtered_gu['total_seq_len'] / expected_len_nt
+
+    return all_gu, filtered_gu
+
+
 def define_gene_units_from_anchors_only(exon13_df, accession_to_chrom):
     """Define gene unit positions using only exon 13 anchor data.
 

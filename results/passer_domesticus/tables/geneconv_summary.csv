@@ -1,0 +1,8 @@
+Metric,Value
+Total pairwise comparisons,45451
+99th percentile null (codons),13
+99.9th percentile null (codons),15
+Pairs exceeding 99th pct,9131 (20.1%)
+Expected by chance,~455
+Max identical codon run,203
+Max run as % of alignment,47.0%
