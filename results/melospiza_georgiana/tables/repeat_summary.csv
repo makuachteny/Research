@@ -1,0 +1,16 @@
+Metric,Value
+Total gene copies,536
+Intact copies (>=80% coverage),52 (9.7%)
+Partial copies (50-80%),484 (90.3%)
+Fragment copies (<50%),0 (0.0%)
+Reference protein length,597 aa
+Reference CDS length,1791 bp
+Mean genomic span,4158 bp
+Median genomic span,3370 bp
+Mean CDS length,1369 bp
+Mean MROH fraction of span,38.5%
+Estimated HEAT repeats (reference),~15
+Mean HEAT repeats per copy,11.4
+Internal repeat regions,2
+Total repeat content (reference),6 aa (1.0%)
+RepeatMasker available,No

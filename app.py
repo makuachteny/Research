@@ -118,6 +118,10 @@ def load_species_data(species_slug):
         "geneconv_summary": safe_load(sp["table_dir"] / "geneconv_summary.csv"),
         "geneconv_pairs": safe_load(sp["table_dir"] / "geneconv_significant_pairs.csv"),
         "selection_tests": safe_load(sp["table_dir"] / "selection_tests.csv"),
+        "beb_sites": safe_load(sp["table_dir"] / "beb_selected_sites.csv"),
+        "per_site_dnds": safe_load(sp["table_dir"] / "per_site_dnds.csv"),
+        "repeat_summary": safe_load(sp["table_dir"] / "repeat_summary.csv"),
+        "repeat_structure": safe_load(sp["table_dir"] / "repeat_structure.csv"),
     }
 
 # Load species config JSON for display
@@ -139,6 +143,10 @@ paml_results = _data["paml_results"]
 geneconv_summary = _data["geneconv_summary"]
 geneconv_pairs = _data["geneconv_pairs"]
 selection_tests = _data["selection_tests"]
+beb_sites = _data["beb_sites"]
+per_site_dnds = _data["per_site_dnds"]
+repeat_summary = _data["repeat_summary"]
+repeat_structure = _data["repeat_structure"]
 
 
 def get_metric(df, metric_name, default="N/A"):
@@ -1238,6 +1246,330 @@ def tab_step5():
 
 
 # ===================================================================
+# STEP 3d — PER-SITE dN/dS & BEB VISUALIZATION
+# ===================================================================
+
+def build_step3d_figs():
+    figs = []
+    if per_site_dnds is None or per_site_dnds.empty:
+        return figs
+
+    df_ps = per_site_dnds.copy()
+
+    # Per-site omega bar chart
+    if 'postmean_w' in df_ps.columns and df_ps['postmean_w'].notna().any():
+        colors = []
+        for _, row in df_ps.iterrows():
+            if row.get('beb_99', False):
+                colors.append(C["danger"])
+            elif row.get('beb_95', False):
+                colors.append(C["accent"])
+            elif row.get('is_beb', False):
+                colors.append(C["accent3"])
+            else:
+                colors.append(C["accent2"])
+
+        f = go.Figure()
+        f.add_trace(go.Bar(x=df_ps['site'], y=df_ps['postmean_w'],
+                           marker_color=colors, name='Per-site omega'))
+        f.add_hline(y=1.0, line_color=C["danger"], line_dash="dash", annotation_text="Neutral")
+        mean_w = df_ps['postmean_w'].mean()
+        f.add_hline(y=mean_w, line_color=C["accent3"], line_dash="solid",
+                    annotation_text=f"Mean={mean_w:.2f}")
+        f.add_hline(y=0.15, line_color=C["accent2"], line_dash="dot",
+                    annotation_text="Bird avg")
+        f.update_layout(title="Per-site posterior omega (dN/dS)",
+                       xaxis_title="Codon position", yaxis_title="Posterior mean omega")
+        figs.append(styled(f))
+
+    # Mutations per site (stacked)
+    if 'n_nonsynonymous' in df_ps.columns:
+        f = go.Figure()
+        f.add_trace(go.Bar(x=df_ps['site'], y=df_ps['n_nonsynonymous'],
+                           name='Nonsynonymous', marker_color=C["danger"]))
+        f.add_trace(go.Bar(x=df_ps['site'], y=df_ps['n_synonymous'],
+                           name='Synonymous', marker_color=C["accent2"]))
+        f.update_layout(barmode='stack', title="Mutations per codon site",
+                       xaxis_title="Codon position", yaxis_title="Mutation count")
+        figs.append(styled(f))
+
+    # BEB probability scatter
+    if beb_sites is not None and not beb_sites.empty:
+        f = px.scatter(beb_sites, x='site', y='prob', size='omega', color='omega',
+                      color_continuous_scale='YlOrRd',
+                      labels={'site': 'Codon position', 'prob': 'Pr(omega>1)', 'omega': 'omega'})
+        f.add_hline(y=0.95, line_color=C["danger"], line_dash="dash", annotation_text="P=0.95")
+        f.add_hline(y=0.99, line_color="darkred", line_dash="dash", annotation_text="P=0.99")
+        f.update_layout(title="BEB site significance vs protein position")
+        figs.append(styled(f))
+
+    # Amino acid diversity
+    if 'n_unique_aa' in df_ps.columns:
+        colors_div = [C["danger"] if row.get('beb_95', False) else C["accent2"]
+                      for _, row in df_ps.iterrows()]
+        f = go.Figure(go.Bar(x=df_ps['site'], y=df_ps['n_unique_aa'],
+                            marker_color=colors_div))
+        mean_aa = df_ps['n_unique_aa'].mean()
+        f.add_hline(y=mean_aa, line_color=C["accent3"], line_dash="solid",
+                    annotation_text=f"Mean={mean_aa:.1f}")
+        f.update_layout(title="Amino acid diversity per codon site",
+                       xaxis_title="Codon position", yaxis_title="Unique amino acids")
+        figs.append(styled(f))
+
+    return figs
+
+
+def tab_step3d():
+    if per_site_dnds is None:
+        return no_data_panel("Per-Site dN/dS & BEB", "3d")
+
+    n_sites = len(per_site_dnds)
+    mean_omega = "N/A"
+    n_beb = "0"
+    n_beb_sig = "0"
+    beb_mean_w = "N/A"
+
+    if 'postmean_w' in per_site_dnds.columns:
+        mean_omega = f"{per_site_dnds['postmean_w'].mean():.2f}"
+    if beb_sites is not None and not beb_sites.empty:
+        n_beb = str(len(beb_sites))
+        n_beb_sig = str(len(beb_sites[beb_sites['prob'] > 0.95])) if 'prob' in beb_sites.columns else "0"
+        if 'omega' in beb_sites.columns:
+            beb_mean_w = f"{beb_sites['omega'].mean():.2f}"
+
+    content = [
+        section_header("3d", "Per-Site dN/dS & BEB Visualization",
+                       "Where along the protein are sites under positive selection?"),
+        html.Div([
+            metric_card("Codon Sites", str(n_sites), "PAML alignment"),
+            metric_card("Mean omega", mean_omega, "Per-site average"),
+            metric_card("BEB Sites", n_beb, f"{n_beb_sig} significant (P>0.95)", highlight=True),
+            metric_card("BEB omega", beb_mean_w, "Mean at selected sites", highlight=True),
+        ], style={"display": "flex", "gap": "18px", "flexWrap": "wrap",
+                  "marginBottom": "28px"}),
+        finding_box(
+            "Per-site omega values from the PAML rst file reveal which codon positions "
+            "are under positive selection. BEB (Bayes Empirical Bayes) posterior probabilities "
+            "identify specific sites with omega > 1. Clustering of BEB sites indicates "
+            "domain-level selection pressure on the HEAT repeat architecture."
+        ),
+    ]
+    content.extend(grid_row(build_step3d_figs()))
+    return html.Div(content)
+
+
+# ===================================================================
+# STEP 06 — REPEAT STRUCTURE ANALYSIS
+# ===================================================================
+
+def build_step6_figs():
+    figs = []
+    if repeat_structure is None or repeat_structure.empty:
+        return figs
+
+    rs = repeat_structure.copy()
+
+    # Coverage fraction distribution
+    if 'coverage_frac' in rs.columns:
+        f = px.histogram(rs, x='coverage_frac', nbins=40,
+                        color_discrete_sequence=[C["accent"]],
+                        labels={'coverage_frac': 'Coverage fraction'})
+        f.add_vline(x=0.80, line_dash="dash", line_color=C["success"],
+                   annotation_text="Intact (80%)")
+        f.add_vline(x=0.50, line_dash="dash", line_color=C["danger"],
+                   annotation_text="Minimum (50%)")
+        f.update_layout(title="MROH coverage per gene copy")
+        figs.append(styled(f))
+
+    # Genomic span distribution
+    if 'genomic_span_bp' in rs.columns:
+        f = px.histogram(rs, x='genomic_span_bp', nbins=40,
+                        color_discrete_sequence=[C["accent2"]],
+                        labels={'genomic_span_bp': 'Genomic span (bp)'})
+        f.update_layout(title="Genomic span per copy")
+        figs.append(styled(f))
+
+    # MROH fraction of span
+    if 'pct_mroh_of_span' in rs.columns:
+        f = px.histogram(rs, x='pct_mroh_of_span', nbins=40,
+                        color_discrete_sequence=[C["plum"]],
+                        labels={'pct_mroh_of_span': '% MROH CDS'})
+        f.update_layout(title="MROH CDS as fraction of genomic span")
+        figs.append(styled(f))
+
+    # HEAT repeats per copy
+    if 'est_heat_repeats' in rs.columns:
+        f = px.histogram(rs, x='est_heat_repeats', nbins=20,
+                        color_discrete_sequence=[C["success"]],
+                        labels={'est_heat_repeats': 'Estimated HEAT repeats'})
+        f.update_layout(title="HEAT repeat units per copy")
+        figs.append(styled(f))
+
+    # Coverage by chromosome class
+    if 'chrom_class' in rs.columns and 'coverage_frac' in rs.columns:
+        f = px.box(rs, x='chrom_class', y='coverage_frac',
+                  color='chrom_class',
+                  color_discrete_map=CLASS_COLORS,
+                  labels={'chrom_class': 'Chromosome class', 'coverage_frac': 'Coverage'})
+        f.update_layout(title="Copy integrity by chromosome class", showlegend=False)
+        figs.append(styled(f))
+
+    return figs
+
+
+def tab_step6():
+    if repeat_summary is None:
+        return no_data_panel("Repeat Structure Analysis", "06")
+
+    def rep_metric(name, default="N/A"):
+        row = repeat_summary[repeat_summary.iloc[:, 0].str.contains(name, na=False, case=False)]
+        return str(row.iloc[0, 1]) if len(row) > 0 else default
+
+    content = [
+        section_header("06", "Repeat Structure Analysis",
+                       "How much of each copy is intact MROH? What is the repeat architecture?"),
+        html.Div([
+            metric_card("Gene Copies", rep_metric('Total gene'), "In genome"),
+            metric_card("Intact", rep_metric('Intact'), ">=80% coverage", highlight=True),
+            metric_card("MROH Fraction", rep_metric('MROH fraction'), "Of genomic span"),
+            metric_card("HEAT Repeats", rep_metric('Mean HEAT repeats'), "Per copy"),
+            metric_card("Ref Protein", rep_metric('Reference protein'), "Full-length"),
+        ], style={"display": "flex", "gap": "18px", "flexWrap": "wrap",
+                  "marginBottom": "28px"}),
+        finding_box(
+            "MROH proteins are defined by tandem HEAT repeat motifs (~40 aa each). "
+            "Copy integrity varies across the genome — intact copies retain most HEAT "
+            "repeats while partial copies may be pseudogenising. The fraction of genomic "
+            "span attributable to MROH CDS reveals how much non-coding sequence (introns, "
+            "TEs) has accumulated between exons."
+        ),
+    ]
+    content.extend(grid_row(build_step6_figs()))
+    return html.Div(content)
+
+
+# ===================================================================
+# STEP 07 — CROSS-SPECIES COMPARISON
+# ===================================================================
+
+def build_step7_figs():
+    figs = []
+    cross_path = PROJECT / "results" / "tables" / "cross_species_comparison.csv"
+    lrt_path = PROJECT / "results" / "tables" / "cross_species_lrt.csv"
+
+    cross = safe_load(cross_path)
+    if cross is None or cross.empty:
+        return figs
+
+    # Copy number
+    f = px.bar(cross, x='Species', y='Gene Copies', color='Species',
+              color_discrete_sequence=px.colors.qualitative.Set2)
+    f.update_layout(title="MROH6 copy number across species", showlegend=False)
+    figs.append(styled(f))
+
+    # Fold elevation
+    if 'Fold Elevation' in cross.columns:
+        f = go.Figure(go.Bar(x=cross['Species'], y=cross['Fold Elevation'],
+                            marker_color=[C["accent"] if v > 3 else C["muted"]
+                                         for v in cross['Fold Elevation'].fillna(0)]))
+        f.add_hline(y=3.0, line_dash="dash", line_color=C["danger"],
+                   annotation_text="3x threshold (RNA signal)")
+        f.update_layout(title="Mutation rate elevation vs genomic baseline",
+                       yaxis_title="Fold elevation")
+        figs.append(styled(f))
+
+    # M0 omega
+    if 'M0 omega (dN/dS)' in cross.columns:
+        m0 = cross.dropna(subset=['M0 omega (dN/dS)'])
+        if not m0.empty:
+            f = go.Figure(go.Bar(x=m0['Species'], y=m0['M0 omega (dN/dS)'],
+                                marker_color=C["accent"]))
+            f.add_hline(y=1.0, line_dash="dash", line_color=C["danger"],
+                       annotation_text="Neutral")
+            f.add_hline(y=0.15, line_dash="dot", line_color=C["accent2"],
+                       annotation_text="Bird avg")
+            f.update_layout(title="PAML M0 global omega", yaxis_title="omega (dN/dS)")
+            figs.append(styled(f))
+
+    # BEB sites
+    if 'BEB Sites (all)' in cross.columns:
+        f = go.Figure()
+        f.add_trace(go.Bar(x=cross['Species'], y=cross['BEB Sites (P>0.99)'].fillna(0),
+                           name='P>0.99 (**)', marker_color='darkred'))
+        sig95 = cross['BEB Sites (P>0.95)'].fillna(0) - cross['BEB Sites (P>0.99)'].fillna(0)
+        f.add_trace(go.Bar(x=cross['Species'], y=sig95,
+                           name='P>0.95 (*)', marker_color=C["danger"]))
+        other = cross['BEB Sites (all)'].fillna(0) - cross['BEB Sites (P>0.95)'].fillna(0)
+        f.add_trace(go.Bar(x=cross['Species'], y=other,
+                           name='Candidate', marker_color=C["accent3"]))
+        f.update_layout(barmode='stack', title="Positively selected sites (BEB)",
+                       yaxis_title="Number of sites")
+        figs.append(styled(f))
+
+    # LRT significance
+    lrt = safe_load(lrt_path)
+    if lrt is not None and not lrt.empty:
+        lrt_plot = lrt[lrt['M1a vs M2a (2dlnL)'] != 'N/A'].copy()
+        if not lrt_plot.empty:
+            lrt_plot['M1a_v'] = lrt_plot['M1a vs M2a (2dlnL)'].astype(float)
+            lrt_plot['M7_v'] = lrt_plot['M7 vs M8 (2dlnL)'].astype(float)
+            f = go.Figure()
+            f.add_trace(go.Bar(x=lrt_plot['Species'], y=lrt_plot['M1a_v'],
+                               name='M1a vs M2a', marker_color=C["accent2"]))
+            f.add_trace(go.Bar(x=lrt_plot['Species'], y=lrt_plot['M7_v'],
+                               name='M7 vs M8', marker_color=C["accent"]))
+            f.add_hline(y=5.99, line_dash="dash", line_color=C["danger"],
+                       annotation_text="chi2 critical (p=0.05)")
+            f.update_layout(barmode='group', title="Likelihood ratio tests",
+                           yaxis_title="2*delta_lnL")
+            figs.append(styled(f))
+
+    # Evidence heatmap
+    if 'MROH % of Span' in cross.columns:
+        f = px.bar(cross, x='Species', y='MROH % of Span',
+                  color='Species', color_discrete_sequence=px.colors.qualitative.Set2)
+        f.update_layout(title="MROH content fraction per species",
+                       yaxis_title="% of genomic span", showlegend=False)
+        figs.append(styled(f))
+
+    return figs
+
+
+def tab_step7():
+    cross_path = PROJECT / "results" / "tables" / "cross_species_comparison.csv"
+    cross = safe_load(cross_path)
+    if cross is None:
+        return no_data_panel("Cross-Species Comparison", "07")
+
+    n_species = len(cross)
+    total_copies = str(int(cross['Gene Copies'].sum())) if 'Gene Copies' in cross.columns else "N/A"
+    n_with_selection = "N/A"
+    if 'BEB Sites (P>0.95)' in cross.columns:
+        n_with_selection = str(int((cross['BEB Sites (P>0.95)'].fillna(0) > 0).sum()))
+
+    content = [
+        section_header("07", "Cross-Species Comparison",
+                       "How do MROH gene copy dynamics compare across songbird lineages?"),
+        html.Div([
+            metric_card("Species", str(n_species), "Songbird genomes"),
+            metric_card("Total Copies", total_copies, "Across all species", highlight=True),
+            metric_card("RNA Signal", "5/5", ">3x mutation elevation"),
+            metric_card("Pos. Selection", f"{n_with_selection}/{n_species}",
+                       "Significant LRT", highlight=True),
+        ], style={"display": "flex", "gap": "18px", "flexWrap": "wrap",
+                  "marginBottom": "28px"}),
+        finding_box(
+            "All five species show >3x mutation rate elevation above genomic baseline, "
+            "supporting RNA-mediated retrotransposition as the shared duplication mechanism. "
+            "Three species with successful PAML runs show highly significant positive selection "
+            "(LRT p < 10^-6), with BEB sites concentrated in the HEAT repeat domains."
+        ),
+    ]
+    content.extend(grid_row(build_step7_figs()))
+    return html.Div(content)
+
+
+# ===================================================================
 # DASH APP
 # ===================================================================
 
@@ -1334,9 +1666,15 @@ app.layout = html.Div([
                     style=tab_base, selected_style=tab_selected),
             dcc.Tab(label="3c  Selection", value="step3c",
                     style=tab_base, selected_style=tab_selected),
+            dcc.Tab(label="3d  Per-Site", value="step3d",
+                    style=tab_base, selected_style=tab_selected),
             dcc.Tab(label="04  Transcriptome", value="step4",
                     style=tab_base, selected_style=tab_selected),
             dcc.Tab(label="05  Price Eq.", value="step5",
+                    style=tab_base, selected_style=tab_selected),
+            dcc.Tab(label="06  Repeats", value="step6",
+                    style=tab_base, selected_style=tab_selected),
+            dcc.Tab(label="07  Comparison", value="step7",
                     style=tab_base, selected_style=tab_selected),
         ],
         style={"borderBottom": f"1px solid {C['border']}"},
@@ -1363,6 +1701,7 @@ app.layout = html.Div([
 def render_tab(tab, species_slug):
     global loci_df, mut_summary, per_copy_div, pairwise_dnds, paml_results
     global geneconv_summary, geneconv_pairs, selection_tests
+    global beb_sites, per_site_dnds, repeat_summary, repeat_structure
     global DATA_PROC, TABLE_DIR, _species_cfg
 
     if species_slug:
@@ -1379,11 +1718,16 @@ def render_tab(tab, species_slug):
         geneconv_summary = d["geneconv_summary"]
         geneconv_pairs = d["geneconv_pairs"]
         selection_tests = d["selection_tests"]
+        beb_sites = d["beb_sites"]
+        per_site_dnds = d["per_site_dnds"]
+        repeat_summary = d["repeat_summary"]
+        repeat_structure = d["repeat_structure"]
 
     tabs = {
         "step1": tab_step1, "step2": tab_step2, "step3": tab_step3,
-        "step3b": tab_step3b, "step3c": tab_step3c,
+        "step3b": tab_step3b, "step3c": tab_step3c, "step3d": tab_step3d,
         "step4": tab_step4, "step5": tab_step5,
+        "step6": tab_step6, "step7": tab_step7,
     }
     return tabs.get(tab, tab_step1)()
 

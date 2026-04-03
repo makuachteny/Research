@@ -38,7 +38,7 @@ Research/
 │   │   ├── mroh6_loci_table.csv             # Locus metadata
 │   │   └── paml_input/                      # PAML codeml input files
 │   │       ├── mroh6_codon.phy              # Codon-aware PHYLIP alignment
-│   │       ├── mroh6_nj.tree                # Neighbor-joining guide tree
+│   │       ├── mroh6_ml.tree                # IQ-TREE maximum-likelihood tree
 │   │       ├── M0.ctl ... M8.ctl            # PAML control files
 │   │       └── M0_out.txt ... M8_out.txt    # PAML results
 │   └── transcriptome/
@@ -261,7 +261,7 @@ Execute notebooks in order: **01 → 02 → 03 → 04 → 05**. Each notebook de
 | `blast_hit_overview.png` | Chromosomal distribution and length distribution of raw BLAST hits |
 | `alignment_gap_distribution.png` | Gap fraction across MAFFT alignment positions |
 | `mutation_rate_analysis.png` | Four-panel: (A) pairwise divergence histogram with baseline, (B) divergence from ancestral copy, (C) Ts/Tv ratio distribution, (D) divergence heatmap |
-| `mroh6_nj_tree.png` | Neighbor-joining gene tree of MROH6 copies |
+| `mroh6_ml_tree.png` | Maximum-likelihood gene tree of MROH6 copies (IQ-TREE) |
 | `mroh6_expression_umap.png` | UMAP colored by MROH6 expression and brain region |
 | `mroh6_violin_region.png` | Expression violin plots by song nucleus (HVC, RA, Area X) |
 | `mroh6_dotplot.png` | Dotplot comparing MROH6 to control genes across brain regions |

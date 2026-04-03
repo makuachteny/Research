@@ -66,6 +66,7 @@ def check_dependencies():
     deps = {
         'mafft': 'MAFFT (multiple sequence alignment) — install via: brew install mafft',
         'codeml': 'PAML codeml (dN/dS analysis) — install via: brew install paml',
+        'iqtree2': 'IQ-TREE2 (ML phylogenetics) — install via: brew install iqtree2',
     }
     missing = []
     for cmd, desc in deps.items():
@@ -84,8 +85,11 @@ STEPS = [
     ('03',  STEPS_DIR / '03_dnds_analysis.py',         'dN/dS Selection Analysis'),
     ('03b', STEPS_DIR / '03b_geneconv_analysis.py',    'Gene Conversion (GENECONV)'),
     ('03c', STEPS_DIR / '03c_selection_tests.py',      'Polymorphism vs Selection Tests'),
+    ('03d', STEPS_DIR / '03d_site_selection_plot.py',  'Per-Site dN/dS & BEB Visualization'),
     ('04',  STEPS_DIR / '04_transcriptome_overlay.py', 'Transcriptome Overlay'),
     ('05',  STEPS_DIR / '05_price_equation.py',        'Price Equation Model'),
+    ('06',  STEPS_DIR / '06_repeat_analysis.py',       'Repeat Structure Analysis'),
+    ('07',  STEPS_DIR / '07_cross_species_comparison.py', 'Cross-Species Comparison Report'),
 ]
 
 

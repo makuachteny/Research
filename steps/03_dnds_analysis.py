@@ -74,7 +74,6 @@ import seaborn as sns
 from Bio import SeqIO, AlignIO, Phylo
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from Bio.Phylo.TreeConstruction import DistanceCalculator, DistanceTreeConstructor
 from Bio.Align import MultipleSeqAlignment
 from pathlib import Path
 import subprocess
@@ -361,31 +360,77 @@ with open(paml_aln_path, 'w') as f:
         f.write(f"{rec.id:<30s}  {str(rec.seq)}\n")
 print(f"  Wrote PAML alignment: {paml_aln_path.name}")
 
-# Build NJ tree
-paml_aln = MultipleSeqAlignment(paml_records)
-calculator = DistanceCalculator('identity')
-dm = calculator.get_distance(paml_aln)
-constructor = DistanceTreeConstructor()
-nj_tree = constructor.nj(dm)
+# Build ML tree with IQ-TREE
+# WHY: IQ-TREE uses maximum likelihood with automatic model selection
+# (ModelFinder), producing a statistically rigorous tree with ultrafast
+# bootstrap support. This is superior to NJ for PAML input because:
+#   1. ML accounts for multiple substitutions at the same site
+#   2. ModelFinder selects the best-fit substitution model automatically
+#   3. Ultrafast bootstrap provides branch support values
+iqtree_aln_path = PAML_DIR / f'{prefix}_iqtree.fasta'
+SeqIO.write(paml_records, iqtree_aln_path, 'fasta')
 
-for clade in nj_tree.find_clades():
+print("  Running IQ-TREE (ML tree with ModelFinder + ultrafast bootstrap)...")
+iqtree_cmd = [
+    'iqtree2',
+    '-s', str(iqtree_aln_path),
+    '-st', 'CODON',           # Codon model (appropriate for dN/dS analysis)
+    '-m', 'MFP',              # ModelFinder Plus — automatic model selection
+    '-bb', '1000',            # 1000 ultrafast bootstrap replicates
+    '-nt', 'AUTO',            # Auto-detect number of threads
+    '--prefix', str(PAML_DIR / f'{prefix}_iqtree'),
+    '-redo',                  # Overwrite previous run
+    '--quiet',                # Minimal screen output
+]
+try:
+    result = subprocess.run(
+        iqtree_cmd, capture_output=True, text=True, timeout=7200
+    )
+    if result.returncode != 0:
+        print(f"  IQ-TREE stderr: {result.stderr[-500:]}")
+        print("  ERROR: IQ-TREE failed. Check alignment quality.")
+        sys.exit(1)
+except FileNotFoundError:
+    print("  ERROR: iqtree2 not found. Install via: brew install iqtree2")
+    sys.exit(1)
+
+# Read the IQ-TREE output tree
+iqtree_treefile = PAML_DIR / f'{prefix}_iqtree.treefile'
+if not iqtree_treefile.exists():
+    print(f"  ERROR: IQ-TREE tree not found: {iqtree_treefile}")
+    sys.exit(1)
+
+iq_tree = Phylo.read(iqtree_treefile, 'newick')
+
+# Clean tree for PAML: remove internal node labels (bootstrap values),
+# ensure positive branch lengths
+for clade in iq_tree.find_clades():
     if not clade.is_terminal():
         clade.name = None
     if clade.branch_length is not None and clade.branch_length <= 0:
         clade.branch_length = 1e-6
 
-tree_path = PAML_DIR / f'{prefix}_nj.tree'
-Phylo.write(nj_tree, tree_path, 'newick')
-print(f"  Wrote NJ tree: {tree_path.name}")
+tree_path = PAML_DIR / f'{prefix}_ml.tree'
+Phylo.write(iq_tree, tree_path, 'newick')
+print(f"  Wrote ML tree: {tree_path.name}")
 
-# ── Figure 3: NJ tree ──
+# Print model selection result
+iqtree_log = PAML_DIR / f'{prefix}_iqtree.log'
+if iqtree_log.exists():
+    with open(iqtree_log) as f:
+        log_text = f.read()
+    model_match = re.search(r'Best-fit model:\s+(\S+)', log_text)
+    if model_match:
+        print(f"  Best-fit model (ModelFinder): {model_match.group(1)}")
+
+# ── Figure 3: ML tree ──
 fig, ax = plt.subplots(figsize=(10, max(8, len(paml_records) * 0.25)))
-Phylo.draw(nj_tree, axes=ax, do_show=False)
-ax.set_title(f'Neighbor-joining tree ({len(paml_records)} {GENE} copies) — {SPECIES}')
+Phylo.draw(iq_tree, axes=ax, do_show=False)
+ax.set_title(f'Maximum-likelihood tree ({len(paml_records)} {GENE} copies) — {SPECIES}')
 plt.tight_layout()
-plt.savefig(FIG_DIR / f'{prefix}_nj_tree.png', dpi=150, bbox_inches='tight')
+plt.savefig(FIG_DIR / f'{prefix}_ml_tree.png', dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  Saved: {FIG_DIR / f'{prefix}_nj_tree.png'}")
+print(f"  Saved: {FIG_DIR / f'{prefix}_ml_tree.png'}")
 
 # ── 3d. Run PAML codeml ─────────────────────────────────────────────────
 print("\n── 3d. Running PAML codeml models ──")
